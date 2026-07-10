@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { getCurrentSite } from "@/lib/site-scope";
 import { services } from "@kodagen/booking-engine";
 import { loadSiteConfigFromDB } from "@/lib/load-site-config";
@@ -10,7 +10,7 @@ export default async function ServicesPage() {
   const ctx = await getCurrentSite();
   if (!ctx?.site) redirect("/admin/login");
 
-  const supabase = createServiceClient();
+  const supabase = await createClient();
   const [allResources, upcoming, config, counts] = await Promise.all([
     services.listResources(supabase, ctx.siteId),
     services.listBookings(supabase, ctx.siteId, { limit: 500 }),

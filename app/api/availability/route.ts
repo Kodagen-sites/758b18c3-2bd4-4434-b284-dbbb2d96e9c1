@@ -1,6 +1,6 @@
 import { FK_COL, KODAGEN_SCHEMA, BOOKING_SCHEMA, withSchema } from '@/lib/db-scope';
 import { NextResponse, type NextRequest } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { CURRENCY_CODE, CURRENCY_SYMBOL } from "@/lib/currency";
 
 /**
@@ -31,17 +31,21 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "Check-out must be after check-in." }, { status: 400 });
   }
 
-  const supabase = createServiceClient();
+  let svc = null;
+  try { svc = createServiceClient(); } catch { svc = null; }
+  const supabase = svc ?? (await createClient());
 
   // Resolve site
-  const { data: site } = await withSchema(supabase, KODAGEN_SCHEMA)
-    .from("sites")
-    .select("id, status")
-    .eq("slug", slug)
-    .maybeSingle();
-  if (!site || site.status !== "active") return NextResponse.json({ ok: false, error: "Site not found." }, { status: 404 });
-
-  const siteId = site.id as string;
+  let siteId = "";
+  if (svc) {
+    const { data: site } = await withSchema(svc, KODAGEN_SCHEMA)
+      .from("sites").select("id, status").eq("slug", slug).maybeSingle();
+    if (site && site.status === "active") siteId = site.id as string;
+  } else {
+    const { data } = await withSchema(supabase, KODAGEN_SCHEMA).rpc("resolve_site_id", { p_slug: slug });
+    siteId = (data ?? "");
+  }
+  if (!siteId) return NextResponse.json({ ok: false, error: "Site not found." }, { status: 404 });
 
   // Get all active rooms
   const { data: resources } = await withSchema(supabase, BOOKING_SCHEMA)

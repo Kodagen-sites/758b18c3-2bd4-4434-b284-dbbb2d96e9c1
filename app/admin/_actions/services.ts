@@ -1,7 +1,7 @@
 "use server";
 import { FK_COL, BOOKING_SCHEMA, withSchema } from '@/lib/db-scope';
 import { revalidatePath } from "next/cache";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { getCurrentSite } from "@/lib/site-scope";
 import { hasPermission } from "@/lib/audit";
 import { CURRENCY_CODE } from "@/lib/currency";
@@ -41,7 +41,7 @@ export async function createService(_: ActionResult | null, fd: FormData): Promi
     if (!name) return { ok: false, error: "Service name is required." };
     if (!Number.isFinite(price) || price < 0) return { ok: false, error: "Invalid price." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
     const { data: existing } = await withSchema(supabase, BOOKING_SCHEMA).from("resources")
       .select("id")
       .eq(FK_COL, ctx.siteId)
@@ -78,7 +78,7 @@ export async function updateService(_: ActionResult | null, fd: FormData): Promi
     const { name, description, price, durationMinutes, capacity, image } = readFields(fd);
     if (!oldName || !name) return { ok: false, error: "Service name missing." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
     const { data: rows } = await withSchema(supabase, BOOKING_SCHEMA).from("resources")
       .select("id, attributes, sort_order")
       .eq(FK_COL, ctx.siteId)
@@ -154,7 +154,7 @@ export async function deleteService(_: ActionResult | null, fd: FormData): Promi
     const name = String(fd.get("name") ?? "").trim();
     if (!name) return { ok: false, error: "Service name missing." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
     const { data: slots } = await withSchema(supabase, BOOKING_SCHEMA).from("resources")
       .select("id")
       .eq(FK_COL, ctx.siteId)
@@ -193,7 +193,7 @@ export async function toggleServiceActive(_: ActionResult | null, fd: FormData):
     const active = String(fd.get("active") ?? "true") === "true";
     if (!name) return { ok: false, error: "Service name missing." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
     const { error } = await withSchema(supabase, BOOKING_SCHEMA).from("resources")
       .update({ active })
       .eq(FK_COL, ctx.siteId)

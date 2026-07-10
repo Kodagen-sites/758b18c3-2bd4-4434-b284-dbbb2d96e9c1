@@ -1,7 +1,9 @@
-import { FK_COL, KODAGEN_SCHEMA, BOOKING_SCHEMA, withSchema } from '@/lib/db-scope';
+import { FK_COL, KODAGEN_SCHEMA, withSchema } from '@/lib/db-scope';
 import { NextResponse, type NextRequest } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { stripeVerify } from "@/lib/payments/stripe";
+import { loadProvider } from "@/lib/payments/providers";
+import { recordPayment } from "@/lib/payments/report";
 import { sendEmail } from "@/lib/email/send";
 import { fmtMoneyCents } from "@/lib/currency";
 import { orderPaymentConfirmedEmail, orderPaymentFailedEmail, orderPaymentFailedAdminEmail } from "@/lib/email/templates";
@@ -10,14 +12,18 @@ import { orderPaymentConfirmedEmail, orderPaymentFailedEmail, orderPaymentFailed
  * Stripe webhook receiver.
  *
  * Authentication: Stripe-Signature header verified against the site's
- * webhook_secret using HMAC-SHA256.
+ * webhook_secret (tenant-pasted, read via lib/payments/providers — which
+ * resolves keyless through the platform integration proxy).
  *
  * Events handled:
- *   checkout.session.completed   → mark order paid, insert succeeded transaction
- *   payment_intent.payment_failed → insert failed transaction
- *   charge.refunded              → insert refunded transaction
+ *   checkout.session.completed    → mark order paid, succeeded transaction
+ *   payment_intent.payment_failed → failed transaction
+ *   charge.refunded               → refunded transaction, order cancelled
  *
- * Order lookup: metadata.order_id (set during session creation in /api/payments/initialize).
+ * Order lookup: metadata.order_id (set during session creation in
+ * /api/payments/initialize). Writes flow through recordPayment — direct in
+ * dedicated mode, via the platform site-proxy keyless (payment writes are
+ * never anon-reachable).
  */
 export async function POST(request: NextRequest) {
   const rawBody   = await request.text();
@@ -39,30 +45,33 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, note: "No order_id in metadata — ignored" });
   }
 
-  const supabase = createServiceClient();
+  let svc: ReturnType<typeof createServiceClient> | null = null;
+  try { svc = createServiceClient(); } catch { svc = null; }
 
-  const { data: order } = await supabase
-    .from("orders")
-    .select("id, site_id, status, notes")
-    .eq("id", orderId)
-    .maybeSingle();
+  const slug = process.env.NEXT_PUBLIC_SITE_SLUG ?? "";
+  let order: { id: string; site_id: string; status: string; notes: string | null } | null = null;
+  if (svc) {
+    const { data } = await svc.from("orders")
+      .select("id, site_id, status, notes").eq("id", orderId).maybeSingle();
+    order = (data as typeof order) ?? null;
+  } else {
+    const anon = await createClient();
+    const { data } = await anon.rpc("get_order_public", { p_slug: slug, p_order_id: orderId });
+    const o = data as Record<string, unknown> | null;
+    if (o?.id) {
+      order = { id: o.id as string, site_id: o.site_id as string, status: (o.status as string) ?? "pending", notes: (o.notes as string) ?? null };
+    }
+  }
 
   if (!order) {
     return NextResponse.json({ ok: true, note: "Order not found — ignored" });
   }
 
-  const siteId = order.site_id as string;
+  const siteId = order.site_id;
 
-  // Load the site's Stripe webhook secret.
-  const { data: integration } = await supabase
-    .from("integrations_config")
-    .select("config, enabled")
-    .eq(FK_COL, siteId)
-    .eq("kind", "stripe")
-    .maybeSingle();
-
-  const cfg           = (integration?.config ?? {}) as Record<string, unknown>;
-  const webhookSecret = typeof cfg.webhook_secret === "string" ? cfg.webhook_secret : "";
+  // The site's Stripe webhook secret — tenant-pasted in /admin/integrations.
+  const provider = await loadProvider(siteId, "stripe");
+  const webhookSecret = provider?.kind === "stripe" ? provider.webhook_secret : "";
   if (!webhookSecret) {
     return NextResponse.json({ ok: false, error: "Stripe webhook secret not configured" }, { status: 400 });
   }
@@ -73,43 +82,37 @@ export async function POST(request: NextRequest) {
 
   const providerRef  = String((obj as { id?: string }).id ?? "");
   const amountTotal  = Number((obj as { amount_total?: number }).amount_total ?? 0);
-  const currency     = String((obj as { currency?: string }).currency ?? (order.notes as string) ?? "eur").toUpperCase();
+  const currency     = String((obj as { currency?: string }).currency ?? order.notes ?? "eur").toUpperCase();
   const customerEmail = (obj as { customer_email?: string }).customer_email ?? metadata.customer_email ?? null;
 
-  const baseRow = {
-    site_id:        siteId,
-    order_id:       orderId,
-    provider:       "stripe" as const,
-    provider_ref:   providerRef || null,
-    amount_cents:   amountTotal,
-    currency,
-    customer_email: customerEmail,
-    metadata:       { stripe_event_id: event.id, order_id: orderId },
-    raw_payload:    obj,
-  };
+  // Load site brand/contact for emails
+  let siteName = "Store";
+  let adminEmail = "";
+  if (svc) {
+    const { data: settings } = await withSchema(svc, KODAGEN_SCHEMA)
+      .from("site_settings").select("business_name, primary_email").eq(FK_COL, siteId).maybeSingle();
+    siteName = (settings?.business_name as string) || "Store";
+    adminEmail = (settings?.primary_email as string) || "";
+  } else {
+    const anon = await createClient();
+    const { data } = await withSchema(anon, KODAGEN_SCHEMA).rpc("get_public_site", { p_slug: slug });
+    const s = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
+    siteName = (s?.business_name as string) || (s?.name as string) || "Store";
+    adminEmail = (s?.primary_email as string) || "";
+  }
 
-  // Load site settings for emails
-  const { data: settings } = await withSchema(supabase, KODAGEN_SCHEMA)
-    .from("site_settings")
-    .select("business_name, primary_email")
-    .eq(FK_COL, siteId)
-    .maybeSingle();
-
-  const siteName   = (settings?.business_name as string) || "Store";
-  const adminEmail = (settings?.primary_email  as string) || "";
   const guestEmail = customerEmail ?? metadata.customer_email ?? null;
   const orderRef   = String(orderId).slice(0, 8).toUpperCase();
   const fmtMoney   = (cents: number) => fmtMoneyCents(cents, currency);
 
   if (event.type === "checkout.session.completed") {
-    const now = new Date().toISOString();
-    await supabase.from("transactions").upsert(
-      { ...baseRow, status: "succeeded", paid_at: now },
-      { onConflict: "site_id,provider,provider_ref" },
-    );
-    if (order.status !== "paid") {
-      await supabase.from("orders").update({ status: "paid", paid_at: now }).eq("id", orderId);
-    }
+    await recordPayment(siteId, {
+      kind: "order", event: "paid", orderId,
+      provider: "stripe", providerRef,
+      amountCents: amountTotal, currency,
+      customerEmail: guestEmail, customerName: metadata.customer_name ?? null,
+      rawPayload: obj,
+    });
     if (guestEmail) {
       const tmpl = orderPaymentConfirmedEmail({
         siteName,
@@ -123,10 +126,13 @@ export async function POST(request: NextRequest) {
     }
   } else if (event.type === "payment_intent.payment_failed") {
     const errMsg = ((obj as { last_payment_error?: { message?: string } }).last_payment_error?.message) ?? "Payment failed";
-    await supabase.from("transactions").upsert(
-      { ...baseRow, status: "failed", error_message: errMsg },
-      { onConflict: "site_id,provider,provider_ref" },
-    );
+    await recordPayment(siteId, {
+      kind: "order", event: "failed", orderId,
+      provider: "stripe", providerRef,
+      amountCents: amountTotal, currency,
+      customerEmail: guestEmail, customerName: metadata.customer_name ?? null,
+      errorMessage: errMsg, rawPayload: obj,
+    });
     if (guestEmail) {
       const tmpl = orderPaymentFailedEmail({
         siteName,
@@ -152,11 +158,12 @@ export async function POST(request: NextRequest) {
         .catch((e) => console.error("[email] stripe payment failed admin:", e));
     }
   } else if (event.type === "charge.refunded") {
-    await supabase.from("transactions").upsert(
-      { ...baseRow, status: "refunded" },
-      { onConflict: "site_id,provider,provider_ref" },
-    );
-    await supabase.from("orders").update({ status: "cancelled" }).eq("id", orderId);
+    await recordPayment(siteId, {
+      kind: "order", event: "refunded", orderId,
+      provider: "stripe", providerRef,
+      amountCents: amountTotal, currency,
+      customerEmail: guestEmail, rawPayload: obj,
+    });
   }
 
   return NextResponse.json({ ok: true });

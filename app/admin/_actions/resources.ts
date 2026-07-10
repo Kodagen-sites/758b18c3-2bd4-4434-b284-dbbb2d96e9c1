@@ -1,7 +1,7 @@
 "use server";
 import { FK_COL, KODAGEN_SCHEMA, BOOKING_SCHEMA, withSchema } from '@/lib/db-scope';
 import { revalidatePath } from "next/cache";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { getCurrentSite } from "@/lib/site-scope";
 import { hasPermission } from "@/lib/audit";
 import { CURRENCY_CODE } from "@/lib/currency";
@@ -45,7 +45,7 @@ export async function createRoomType(_: ActionResult | null, fd: FormData): Prom
     if (!type) return { ok: false, error: "Type name is required." };
     if (!Number.isFinite(pricePerNight) || pricePerNight < 0) return { ok: false, error: "Invalid price." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
 
     // De-dupe against existing room names for this type so we don't violate uniqueness.
     const { data: existing } = await withSchema(supabase, BOOKING_SCHEMA).from("resources")
@@ -92,7 +92,7 @@ export async function addRoomToType(_: ActionResult | null, fd: FormData): Promi
     const name = String(fd.get("name") ?? "").trim();
     if (!type || !name) return { ok: false, error: "Type and room number are required." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
 
     // Pull a sample row of this type to copy description/price/attrs onto the new room.
     const { data: sample } = await withSchema(supabase, BOOKING_SCHEMA).from("resources")
@@ -143,7 +143,7 @@ export async function renameRoom(_: ActionResult | null, fd: FormData): Promise<
     const name = String(fd.get("name") ?? "").trim();
     if (!id || !name) return { ok: false, error: "Missing id or name." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
     const { error } = await withSchema(supabase, BOOKING_SCHEMA).from("resources")
       .update({ name })
       .eq("id", id)
@@ -166,7 +166,7 @@ export async function deleteRoom(_: ActionResult | null, fd: FormData): Promise<
     const id = String(fd.get("id") ?? "");
     if (!id) return { ok: false, error: "Missing id." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
     const { count } = await withSchema(supabase, BOOKING_SCHEMA).from("bookings")
       .select("*", { count: "exact", head: true })
       .eq(FK_COL, ctx.siteId)
@@ -205,7 +205,7 @@ export async function updateRoomType(_: ActionResult | null, fd: FormData): Prom
 
     if (!oldType || !type) return { ok: false, error: "Type missing." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
 
     // Read current attributes per row so we don't blow them away
     const { data: rows } = await withSchema(supabase, BOOKING_SCHEMA).from("resources")
@@ -250,7 +250,7 @@ export async function deleteRoomType(_: ActionResult | null, fd: FormData): Prom
     const type = String(fd.get("type") ?? "").trim();
     if (!type) return { ok: false, error: "Type missing." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
 
     const { data: rooms } = await withSchema(supabase, BOOKING_SCHEMA).from("resources")
       .select("id")
@@ -292,7 +292,7 @@ export async function toggleRoomActive(_: ActionResult | null, fd: FormData): Pr
     const active = String(fd.get("active") ?? "true") === "true";
     if (!id) return { ok: false, error: "Missing id." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
     const { error } = await withSchema(supabase, BOOKING_SCHEMA).from("resources")
       .update({ active })
       .eq("id", id)

@@ -1,27 +1,32 @@
 import { FK_COL, KODAGEN_SCHEMA, BOOKING_SCHEMA, withSchema } from '@/lib/db-scope';
 import { NextResponse, type NextRequest } from "next/server";
 import { headers } from "next/headers";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { loadEnabledProviders, loadProvider, getSiteByRef } from "@/lib/payments/providers";
 import { paystackInitialize } from "@/lib/payments/paystack";
 import { stripeInitialize } from "@/lib/payments/stripe";
+import { recordPayment } from "@/lib/payments/report";
 
 /**
- * Public endpoint — initialises a payment against an existing booking.
+ * Public endpoint — initialises a payment against an existing booking OR
+ * catalog order.
  *
- * Flow:
+ * Booking flow:
  *   1. Customer completes the booking modal → booking row exists in `pending`
- *   2. Modal POSTs here with the booking reference + chosen provider
- *   3. We pull the site's keys, call the gateway, write a `pending` transaction
- *   4. Return `{ provider, authorization_url? | client_secret? }` to the modal
- *   5. Modal redirects (Paystack) or mounts Stripe Elements
- *   6. After payment the gateway calls our webhook, which flips both rows
+ *   2. Modal POSTs here with { slug, reference, provider? }
+ * Order flow:
+ *   1. Checkout POSTs /api/orders → order row exists in `pending`
+ *   2. Checkout POSTs here with { slug, orderId, provider? }
  *
- * If `provider` is omitted we pick the first enabled one (Paystack first
- * because it's the dominant pattern in our market).
+ * Either way: we pull the site's keys, call the gateway, record a `pending`
+ * transaction + stamp the row's payment_ref, and return
+ * `{ provider, authorization_url? | client_secret? }`. After payment the
+ * gateway calls our webhook, which flips the rows.
+ *
+ * Amounts ALWAYS come from the DB row (server-priced) — never from the client.
  */
 export async function POST(request: NextRequest) {
-  let body: { slug?: string; reference?: string; provider?: "paystack" | "stripe" };
+  let body: { slug?: string; reference?: string; orderId?: string; provider?: "paystack" | "stripe" };
   try {
     body = await request.json();
   } catch {
@@ -30,8 +35,9 @@ export async function POST(request: NextRequest) {
 
   const slug = String(body.slug ?? "").trim();
   const reference = String(body.reference ?? "").trim();
-  if (!slug || !reference) {
-    return NextResponse.json({ ok: false, error: "Missing slug or reference" }, { status: 400 });
+  const orderId = String(body.orderId ?? "").trim();
+  if (!slug || (!reference && !orderId)) {
+    return NextResponse.json({ ok: false, error: "Missing slug or reference/orderId" }, { status: 400 });
   }
 
   const site = await getSiteByRef(slug);
@@ -51,29 +57,115 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: `${providerKind} is not enabled or missing keys` }, { status: 400 });
   }
 
-  // Pull the booking — the customer email + amount come from here
-  const supabase = createServiceClient();
-  const { data: booking } = await withSchema(supabase, BOOKING_SCHEMA)
-    .from("bookings")
-    .select(`
-      id, reference, total_cents, currency, customer_id,
-      booking_customer:customers!inner(full_name, email, phone)
-    `)
-    .eq(FK_COL, site.id)
-    .eq("reference", reference)
-    .maybeSingle();
+  let svc: ReturnType<typeof createServiceClient> | null = null;
+  try { svc = createServiceClient(); } catch { svc = null; }
+
+  const h = await headers();
+  const origin = `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host") ?? "localhost:3000"}`;
+  const siteBaseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? origin;
+
+  // ══ Order lane ═══════════════════════════════════════════════════════════
+  if (orderId) {
+    let order: { id: string; total: number; guest_email: string | null; guest_name: string | null; notes: string | null; status: string } | null = null;
+    if (svc) {
+      const { data } = await svc.from("orders")
+        .select("id, total, guest_email, guest_name, notes, status")
+        .eq("id", orderId).eq(FK_COL, site.id).maybeSingle();
+      order = (data as typeof order) ?? null;
+    } else {
+      const anon = await createClient();
+      const { data } = await anon.rpc("get_order_public", { p_slug: slug, p_order_id: orderId });
+      const o = data as Record<string, unknown> | null;
+      if (o?.id) {
+        order = {
+          id: o.id as string, total: Number(o.total ?? 0),
+          guest_email: (o.guest_email as string) ?? null, guest_name: (o.guest_name as string) ?? null,
+          notes: (o.notes as string) ?? null, status: (o.status as string) ?? "pending",
+        };
+      }
+    }
+    if (!order) return NextResponse.json({ ok: false, error: "Order not found" }, { status: 404 });
+    if (order.status === "paid") return NextResponse.json({ ok: false, error: "Order is already paid" }, { status: 409 });
+    const email = order.guest_email;
+    if (!email) return NextResponse.json({ ok: false, error: "Order has no customer email — required for Paystack/Stripe" }, { status: 400 });
+    const amount = Math.max(0, Math.round(order.total));
+    const currency = order.notes || provider.currency || "USD";
+    const confirmedUrl = `${siteBaseUrl}/order/confirmed?ref=${order.id}`;
+
+    if (provider.kind === "paystack") {
+      const res = await paystackInitialize(provider, {
+        amount_cents: amount,
+        currency,
+        email,
+        reference: `ORD-${order.id}`,
+        callback_url: confirmedUrl,
+        metadata: { order_id: order.id, slug, customer_name: order.guest_name ?? "" },
+      });
+      if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: 502 });
+      await recordPayment(site.id, {
+        kind: "order", event: "initialized", orderId: order.id,
+        provider: "paystack", providerRef: res.reference,
+        amountCents: amount, currency, customerEmail: email, customerName: order.guest_name,
+      });
+      return NextResponse.json({ ok: true, provider: "paystack", authorization_url: res.authorization_url, reference: res.reference });
+    }
+
+    const res = await stripeInitialize(provider, {
+      amount_cents: amount,
+      currency,
+      email,
+      reference: `ORD-${order.id}`,
+      description: `Order ${order.id.slice(0, 8).toUpperCase()}`,
+      metadata: { order_id: order.id, slug, customer_email: email, customer_name: order.guest_name ?? "" },
+      success_url: `${confirmedUrl}&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${confirmedUrl}&cancelled=1`,
+    });
+    if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: 502 });
+    await recordPayment(site.id, {
+      kind: "order", event: "initialized", orderId: order.id,
+      provider: "stripe", providerRef: res.session_id,
+      amountCents: amount, currency, customerEmail: email, customerName: order.guest_name,
+    });
+    return NextResponse.json({ ok: true, provider: "stripe", authorization_url: res.checkout_url, reference: res.session_id });
+  }
+
+  // ══ Booking lane ═════════════════════════════════════════════════════════
+  type Cust = { full_name: string | null; email: string | null; phone: string | null };
+  let booking: { id: string; reference: string; total_cents: number; currency: string | null } | null = null;
+  let c: Partial<Cust> = {};
+  if (svc) {
+    const { data } = await withSchema(svc, BOOKING_SCHEMA)
+      .from("bookings")
+      .select(`
+        id, reference, total_cents, currency, customer_id,
+        booking_customer:customers!inner(full_name, email, phone)
+      `)
+      .eq(FK_COL, site.id)
+      .eq("reference", reference)
+      .maybeSingle();
+    if (data) {
+      booking = data as unknown as typeof booking;
+      c = (data as unknown as { booking_customer?: Cust }).booking_customer ?? {};
+    }
+  } else {
+    const anon = await createClient();
+    const { data } = await withSchema(anon, BOOKING_SCHEMA)
+      .rpc("get_booking_for_payment", { p_slug: slug, p_reference: reference });
+    const b = data as Record<string, unknown> | null;
+    if (b?.id) {
+      booking = {
+        id: b.id as string, reference: b.reference as string,
+        total_cents: Number(b.total_cents ?? 0), currency: (b.currency as string) ?? null,
+      };
+      c = { full_name: (b.full_name as string) ?? null, email: (b.email as string) ?? null, phone: (b.phone as string) ?? null };
+    }
+  }
   if (!booking) return NextResponse.json({ ok: false, error: "Booking not found" }, { status: 404 });
 
-  type Cust = { full_name: string | null; email: string | null; phone: string | null };
-  const c: Partial<Cust> =
-    (booking as unknown as { booking_customer?: Cust }).booking_customer ?? {};
   const email = c.email;
   if (!email) {
     return NextResponse.json({ ok: false, error: "Booking has no customer email — required for Paystack/Stripe" }, { status: 400 });
   }
-
-  const h = await headers();
-  const origin = `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host") ?? "localhost:3000"}`;
 
   // ── Paystack ──
   if (provider.kind === "paystack") {
@@ -88,21 +180,13 @@ export async function POST(request: NextRequest) {
     if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: 502 });
 
     // Record a pending transaction so it shows up in admin even before webhook
-    await withSchema(supabase, BOOKING_SCHEMA).from("transactions").upsert(
-      {
-        site_id: site.id,
-        booking_id: booking.id,
-        booking_ref: reference,
-        provider: "paystack",
-        provider_ref: res.reference,
-        amount_cents: booking.total_cents,
-        currency: booking.currency,
-        status: "pending",
-        customer_email: email,
-        customer_name: c.full_name,
-      },
-      { onConflict: "site_id,provider,provider_ref" },
-    );
+    await recordPayment(site.id, {
+      kind: "booking", event: "initialized",
+      bookingId: booking.id, bookingRef: reference,
+      provider: "paystack", providerRef: res.reference,
+      amountCents: booking.total_cents, currency: booking.currency ?? provider.currency,
+      customerEmail: email, customerName: c.full_name ?? null,
+    });
     return NextResponse.json({
       ok: true,
       provider: "paystack",
@@ -112,7 +196,6 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Stripe ──
-  const siteBaseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? origin;
   const res = await stripeInitialize(provider, {
     amount_cents: booking.total_cents,
     currency: booking.currency ?? provider.currency,
@@ -130,26 +213,17 @@ export async function POST(request: NextRequest) {
   });
   if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: 502 });
 
-  await withSchema(supabase, BOOKING_SCHEMA).from("transactions").upsert(
-    {
-      site_id: site.id,
-      booking_id: booking.id,
-      booking_ref: reference,
-      provider: "stripe",
-      provider_ref: res.session_id,
-      amount_cents: booking.total_cents,
-      currency: booking.currency,
-      status: "pending",
-      customer_email: email,
-      customer_name: c.full_name,
-    },
-    { onConflict: "site_id,provider,provider_ref" },
-  );
+  await recordPayment(site.id, {
+    kind: "booking", event: "initialized",
+    bookingId: booking.id, bookingRef: reference,
+    provider: "stripe", providerRef: res.session_id,
+    amountCents: booking.total_cents, currency: booking.currency ?? provider.currency,
+    customerEmail: email, customerName: c.full_name ?? null,
+  });
   return NextResponse.json({
     ok: true,
     provider: "stripe",
-    publishable_key: provider.publishable_key,
-    checkout_url: res.checkout_url,
-    session_id: res.session_id,
+    authorization_url: res.checkout_url,
+    reference: res.session_id,
   });
 }

@@ -1,7 +1,5 @@
-import { FK_COL, KODAGEN_SCHEMA, BOOKING_SCHEMA, withSchema } from '@/lib/db-scope';
 import { NextResponse, type NextRequest } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
-import { loadEnabledProviders } from "@/lib/payments/providers";
+import { loadEnabledProviders, getSiteByRef } from "@/lib/payments/providers";
 
 /**
  * Public endpoint — returns which payment providers are enabled for a site.
@@ -13,15 +11,12 @@ export async function GET(request: NextRequest) {
   const slug = request.nextUrl.searchParams.get("slug") ?? "";
   if (!slug) return NextResponse.json({ ok: false, error: "Missing slug" }, { status: 400 });
 
-  const supabase = createServiceClient();
-  const { data: site } = await withSchema(supabase, KODAGEN_SCHEMA)
-    .from("sites")
-    .select("id, status")
-    .eq("slug", slug)
-    .maybeSingle();
-  if (!site || site.status !== "active") return NextResponse.json({ ok: false, error: "Site not found." }, { status: 404 });
+  // Active-site check works in both modes (service client, or the anon
+  // get_public_site definer RPC keyless).
+  const site = await getSiteByRef(slug);
+  if (!site) return NextResponse.json({ ok: false, error: "Site not found." }, { status: 404 });
 
-  const providers = await loadEnabledProviders(site.id as string);
+  const providers = await loadEnabledProviders(site.id);
 
   return NextResponse.json({
     ok: true,

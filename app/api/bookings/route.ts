@@ -1,8 +1,9 @@
 import { FK_COL, KODAGEN_SCHEMA, BOOKING_SCHEMA, withSchema } from '@/lib/db-scope';
 import { NextResponse, type NextRequest } from "next/server";
 import { headers } from "next/headers";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { services } from "@kodagen/booking-engine";
+import { recordPayment } from "@/lib/payments/report";
 import { loadEnabledProviders } from "@/lib/payments/providers";
 import { paystackInitialize } from "@/lib/payments/paystack";
 import { stripeInitialize } from "@/lib/payments/stripe";
@@ -55,21 +56,55 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: false, error: "Email or phone is required." }, { status: 400 });
   }
 
-  // Same-day bookings (events) use 9am-11pm. Multi-day (rooms) use 3pm-11am.
+  // Same-day bookings (appointments/events) default to 9am-11pm; an explicit
+  // startTime ("HH:mm", from the appointment-mode booking drawer) books that
+  // slot instead — endTime or startTime+60min. Multi-day (rooms) use 3pm-11am.
   const sameDay = checkIn === checkOut;
-  const startISO = new Date(`${checkIn}T${sameDay ? "09:00:00" : "15:00:00"}`).toISOString();
-  const endISO   = new Date(`${checkOut}T${sameDay ? "23:00:00" : "11:00:00"}`).toISOString();
+  const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const startTime = String((body as { startTime?: string }).startTime ?? "").trim();
+  const endTime = String((body as { endTime?: string }).endTime ?? "").trim();
+  let startISO: string;
+  let endISO: string;
+  if (sameDay && hhmm.test(startTime)) {
+    const start = new Date(`${checkIn}T${startTime}:00`);
+    const end = hhmm.test(endTime) && endTime > startTime
+      ? new Date(`${checkIn}T${endTime}:00`)
+      : new Date(start.getTime() + 60 * 60_000);
+    startISO = start.toISOString();
+    endISO = end.toISOString();
+  } else {
+    startISO = new Date(`${checkIn}T${sameDay ? "09:00:00" : "15:00:00"}`).toISOString();
+    endISO   = new Date(`${checkOut}T${sameDay ? "23:00:00" : "11:00:00"}`).toISOString();
+  }
   if (new Date(endISO) <= new Date(startISO)) {
     return NextResponse.json({ ok: false, error: "Check-out must be after check-in." }, { status: 400 });
   }
 
-  const supabase = createServiceClient();
+  // Service client in dedicated/legacy mode; cookie-anon client keyless. The
+  // keyless lane reads only public-safe rows (resources via the active-site
+  // RLS policy) and writes through the `place_booking` definer RPC.
+  let svc: ReturnType<typeof createServiceClient> | null = null;
+  try { svc = createServiceClient(); } catch { svc = null; }
+  const supabase = svc ?? (await createClient());
 
-  const { data: site } = await withSchema(supabase, KODAGEN_SCHEMA)
-    .from("sites")
-    .select("id, status")
-    .eq("slug", slug)
-    .maybeSingle();
+  let site: { id: string; status: string } | null = null;
+  let publicSite: Record<string, unknown> | null = null;
+  if (svc) {
+    const { data } = await withSchema(svc, KODAGEN_SCHEMA)
+      .from("sites")
+      .select("id, status")
+      .eq("slug", slug)
+      .maybeSingle();
+    site = (data as typeof site) ?? null;
+  } else {
+    const { data } = await withSchema(supabase, KODAGEN_SCHEMA)
+      .rpc("get_public_site", { p_slug: slug });
+    const s = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null;
+    if (s?.site_id) {
+      publicSite = s;
+      site = { id: s.site_id as string, status: "active" }; // RPC returns active sites only
+    }
+  }
   if (!site || site.status !== "active") return NextResponse.json({ ok: false, error: "Site not found." }, { status: 404 });
 
   // Find the first physical room of that TYPE that doesn't already have a
@@ -95,20 +130,37 @@ export async function POST(request: NextRequest) {
   let lastError = "";
   for (const room of candidates) {
     try {
-      const booking = await services.createBooking(supabase, site.id, {
-        resource_id: room.id as string,
-        start_at: startISO,
-        end_at: endISO,
-        guest_count: guests,
-        total_cents,
-        currency,
-        customer: {
-          full_name: name,
-          email: email || undefined,
-          phone: phone || undefined,
-        },
-        fields: specialRequests ? { special_requests: specialRequests } : {},
-      });
+      const booking = svc
+        ? await services.createBooking(svc, site.id, {
+            resource_id: room.id as string,
+            start_at: startISO,
+            end_at: endISO,
+            guest_count: guests,
+            total_cents,
+            currency,
+            customer: {
+              full_name: name,
+              email: email || undefined,
+              phone: phone || undefined,
+            },
+            fields: specialRequests ? { special_requests: specialRequests } : {},
+          })
+        : await (async () => {
+            // Keyless: the definer RPC picks the room, dedupes the customer,
+            // holds availability and prices server-side in one transaction.
+            const { data, error: rpcErr } = await withSchema(supabase, BOOKING_SCHEMA).rpc("place_booking", {
+              p_slug: slug,
+              p_room_type: roomType,
+              p_start: startISO,
+              p_end: endISO,
+              p_guests: guests,
+              p_customer: { full_name: name, email: email || null, phone: phone || null },
+              p_fields: specialRequests ? { special_requests: specialRequests } : {},
+            });
+            const r = data as { ok?: boolean; error?: string; booking_id?: string; reference?: string } | null;
+            if (!r?.ok || !r.booking_id) throw new Error(r?.error || rpcErr?.message || "Booking failed.");
+            return { id: r.booking_id, reference: r.reference as string };
+          })();
 
       // ── Google sync (no-ops unless the integrations are connected) ──
       void googleSheetsAppendRow(site.id as string, [
@@ -144,21 +196,15 @@ export async function POST(request: NextRequest) {
             metadata: { booking_reference: booking.reference, slug },
           });
           if (payRes.ok) {
-            // Write pending transaction
-            const { error: txErr } = await withSchema(supabase, BOOKING_SCHEMA).from("transactions").upsert({
-              site_id: site.id,
-              booking_id: booking.id,
-              booking_ref: booking.reference,
-              provider: "paystack",
-              provider_ref: payRes.reference,
-              amount_cents: total_cents,
-              currency,
-              status: "pending",
-              customer_email: email,
-              customer_name: name,
-            }, { onConflict: "site_id,provider,provider_ref" });
-            if (txErr) console.error("[bookings] transaction upsert error:", txErr.message);
-            else console.log("[bookings] pending transaction created for", booking.reference);
+            // Write pending transaction (direct in dedicated, site-proxy keyless)
+            const txOk = await recordPayment(site.id, {
+              kind: "booking", event: "initialized",
+              bookingId: booking.id, bookingRef: booking.reference,
+              provider: "paystack", providerRef: payRes.reference,
+              amountCents: total_cents, currency,
+              customerEmail: email, customerName: name,
+            });
+            if (!txOk) console.error("[bookings] pending transaction record failed for", booking.reference);
 
             return NextResponse.json({
               ok: true,
@@ -181,19 +227,14 @@ export async function POST(request: NextRequest) {
             cancel_url: `${origin}/`,
           });
           if (payRes.ok) {
-            const { error: txErr } = await withSchema(supabase, BOOKING_SCHEMA).from("transactions").upsert({
-              site_id: site.id,
-              booking_id: booking.id,
-              booking_ref: booking.reference,
-              provider: "stripe",
-              provider_ref: payRes.session_id,
-              amount_cents: total_cents,
-              currency,
-              status: "pending",
-              customer_email: email,
-              customer_name: name,
-            }, { onConflict: "site_id,provider,provider_ref" });
-            if (txErr) console.error("[bookings] stripe transaction error:", txErr.message);
+            const txOk = await recordPayment(site.id, {
+              kind: "booking", event: "initialized",
+              bookingId: booking.id, bookingRef: booking.reference,
+              provider: "stripe", providerRef: payRes.session_id,
+              amountCents: total_cents, currency,
+              customerEmail: email, customerName: name,
+            });
+            if (!txOk) console.error("[bookings] stripe pending transaction record failed");
 
             return NextResponse.json({
               ok: true,
@@ -205,9 +246,14 @@ export async function POST(request: NextRequest) {
       }
 
       // ── No payment provider → confirm immediately + send email
-      // Load site config for the email template
-      const { data: siteRow } = await withSchema(supabase, KODAGEN_SCHEMA).from("sites")
-        .select("name, config, theme").eq("id", site.id).maybeSingle();
+      // Load site config for the email template (keyless already has it from
+      // the get_public_site call above)
+      let siteRow: { name?: unknown; config?: unknown; theme?: unknown } | null = publicSite;
+      if (svc) {
+        const { data } = await withSchema(svc, KODAGEN_SCHEMA).from("sites")
+          .select("name, config, theme").eq("id", site.id).maybeSingle();
+        siteRow = data ?? null;
+      }
       const siteCfg = (siteRow?.config ?? {}) as Record<string, unknown>;
       const thm = (siteRow?.theme ?? {}) as Record<string, unknown>;
 

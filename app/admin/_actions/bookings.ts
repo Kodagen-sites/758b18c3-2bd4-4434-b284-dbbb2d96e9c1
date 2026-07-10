@@ -1,7 +1,7 @@
 "use server";
 import { FK_COL, KODAGEN_SCHEMA, BOOKING_SCHEMA, withSchema } from '@/lib/db-scope';
 import { revalidatePath } from "next/cache";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { getCurrentSite } from "@/lib/site-scope";
 import { services } from "@kodagen/booking-engine";
 import type { BookingState } from "@kodagen/booking-engine";
@@ -9,7 +9,7 @@ import { logAudit, hasPermission } from "@/lib/audit";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
-async function bookingIdFromReference(supabase: ReturnType<typeof createServiceClient>, siteId: string, reference: string) {
+async function bookingIdFromReference(supabase: Awaited<ReturnType<typeof createClient>>, siteId: string, reference: string) {
   const { data, error } = await withSchema(supabase, BOOKING_SCHEMA)
     .from("bookings")
     .select("id")
@@ -26,7 +26,7 @@ async function transition(reference: string, newState: BookingState, reason?: st
   // Permission check — booking transitions need bookings.checkin
   if (!hasPermission(ctx.role, "bookings.checkin", ctx.permissions)) return { ok: false, error: "No permission." };
 
-  const supabase = createServiceClient();
+  const supabase = await createClient();
   const id = await bookingIdFromReference(supabase, ctx.siteId, reference);
   if (!id) return { ok: false, error: "Booking not found." };
 
@@ -74,7 +74,7 @@ export async function rescheduleBooking(_: ActionResult | null, fd: FormData): P
   const endISO = new Date(`${newCheckOut}T${sameDay ? "23:00:00" : "11:00:00"}`).toISOString();
   if (new Date(endISO) <= new Date(startISO)) return { ok: false, error: "Check-out must be after check-in." };
 
-  const supabase = createServiceClient();
+  const supabase = await createClient();
   const { data: booking } = await withSchema(supabase, BOOKING_SCHEMA).from("bookings")
     .select("id, resource_id, start_at, end_at, total_cents, state")
     .eq(FK_COL, ctx.siteId).eq("reference", reference).maybeSingle();
@@ -130,7 +130,7 @@ export async function modifyStay(_: ActionResult | null, fd: FormData): Promise<
   const newCheckOut = String(fd.get("checkOut") ?? "").trim();
   if (!reference || !newCheckOut) return { ok: false, error: "Missing fields." };
 
-  const supabase = createServiceClient();
+  const supabase = await createClient();
   const { data: booking } = await withSchema(supabase, BOOKING_SCHEMA).from("bookings")
     .select("id, resource_id, start_at, end_at, state")
     .eq(FK_COL, ctx.siteId).eq("reference", reference).maybeSingle();
@@ -181,7 +181,7 @@ export async function updateBookingNotes(_: ActionResult | null, fd: FormData): 
   const notes = String(fd.get("notes") ?? "").trim();
   if (!reference) return { ok: false, error: "Missing reference." };
 
-  const supabase = createServiceClient();
+  const supabase = await createClient();
   const { error } = await withSchema(supabase, BOOKING_SCHEMA).from("bookings")
     .update({ internal_notes: notes || null })
     .eq(FK_COL, ctx.siteId).eq("reference", reference);
@@ -210,7 +210,7 @@ export async function reassignBookingRoom(_: ActionResult | null, fd: FormData):
   const newResourceId = String(fd.get("resourceId") ?? "").trim();
   if (!reference || !newResourceId) return { ok: false, error: "Missing booking or room." };
 
-  const supabase = createServiceClient();
+  const supabase = await createClient();
 
   const { data: booking } = await withSchema(supabase, BOOKING_SCHEMA)
     .from("bookings")

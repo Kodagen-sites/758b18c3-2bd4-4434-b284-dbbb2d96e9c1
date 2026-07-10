@@ -1,7 +1,9 @@
-import { FK_COL, KODAGEN_SCHEMA, BOOKING_SCHEMA, withSchema } from '@/lib/db-scope';
+import { FK_COL, KODAGEN_SCHEMA, withSchema } from '@/lib/db-scope';
 import { NextResponse, type NextRequest } from "next/server";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { paystackVerify } from "@/lib/payments/paystack";
+import { loadProvider } from "@/lib/payments/providers";
+import { recordPayment } from "@/lib/payments/report";
 import { sendEmail } from "@/lib/email/send";
 import { fmtMoneyCents } from "@/lib/currency";
 import { orderPaymentConfirmedEmail, orderPaymentFailedEmail, orderPaymentFailedAdminEmail } from "@/lib/email/templates";
@@ -9,15 +11,19 @@ import { orderPaymentConfirmedEmail, orderPaymentFailedEmail, orderPaymentFailed
 /**
  * Paystack webhook receiver.
  *
- * Authentication: HMAC-SHA512 of raw body using the site's Paystack secret key,
- * sent as `x-paystack-signature`.
+ * Authentication: HMAC-SHA512 of raw body using the site's Paystack secret key
+ * (tenant-pasted, read via lib/payments/providers — keyless-safe through the
+ * platform integration proxy), sent as `x-paystack-signature`.
  *
  * Events handled:
- *   charge.success   → mark order paid, insert succeeded transaction
- *   charge.failed    → insert failed transaction
- *   refund.processed → insert refunded transaction
+ *   charge.success   → mark order paid, succeeded transaction
+ *   charge.failed    → failed transaction
+ *   refund.processed → refunded transaction, order cancelled
  *
- * Always returns 200 once signature verified — Paystack stops retrying on 200.
+ * Order lookup: metadata.order_id (set at init), falling back to the
+ * payment_ref stamped on the order (service-key mode only). Writes flow
+ * through recordPayment — direct in dedicated mode, via the platform
+ * site-proxy keyless.
  */
 export async function POST(request: NextRequest) {
   const rawBody  = await request.text();
@@ -32,37 +38,49 @@ export async function POST(request: NextRequest) {
 
   const data      = event.data ?? {};
   const reference = String((data.reference as string | undefined) ?? "").trim();
+  const metadata  = (data.metadata as Record<string, unknown> | undefined) ?? {};
   if (!reference) {
     return NextResponse.json({ ok: false, error: "Missing reference" }, { status: 400 });
   }
 
-  const supabase = createServiceClient();
+  let svc: ReturnType<typeof createServiceClient> | null = null;
+  try { svc = createServiceClient(); } catch { svc = null; }
+  const slug = process.env.NEXT_PUBLIC_SITE_SLUG ?? "";
 
-  // Look up the order via the payment reference we stored at init time.
-  const { data: order } = await supabase
-    .from("orders")
-    .select("id, site_id, status, total, notes")
-    .eq("payment_ref", reference)
-    .maybeSingle();
+  // Which order is this? metadata.order_id (set at init) is the primary key
+  // into our world; ORD-<uuid> references carry it too. The legacy
+  // payment_ref lookup needs the service key.
+  let orderIdHint = String(metadata.order_id ?? "").trim();
+  if (!orderIdHint && /^ORD-[0-9a-f-]{36}$/i.test(reference)) {
+    orderIdHint = reference.slice(4);
+  }
+
+  let order: { id: string; site_id: string; status: string; notes: string | null } | null = null;
+  if (svc) {
+    let q = svc.from("orders").select("id, site_id, status, notes");
+    q = orderIdHint ? q.eq("id", orderIdHint) : q.eq("payment_ref", reference);
+    const { data: o } = await q.maybeSingle();
+    order = (o as typeof order) ?? null;
+  } else if (orderIdHint) {
+    const anon = await createClient();
+    const { data: o } = await anon.rpc("get_order_public", { p_slug: slug, p_order_id: orderIdHint });
+    const r = o as Record<string, unknown> | null;
+    if (r?.id) {
+      order = { id: r.id as string, site_id: r.site_id as string, status: (r.status as string) ?? "pending", notes: (r.notes as string) ?? null };
+    }
+  }
 
   if (!order) {
     // Not our reference — acknowledge so Paystack doesn't keep retrying.
     return NextResponse.json({ ok: true, note: "Unknown reference — ignored" });
   }
 
-  const siteId  = order.site_id as string;
-  const orderId = order.id     as string;
+  const siteId  = order.site_id;
+  const orderId = order.id;
 
-  // Load the site's Paystack secret key to verify the signature.
-  const { data: integration } = await supabase
-    .from("integrations_config")
-    .select("config, enabled")
-    .eq(FK_COL, siteId)
-    .eq("kind", "paystack")
-    .maybeSingle();
-
-  const cfg       = (integration?.config ?? {}) as Record<string, unknown>;
-  const secretKey = typeof cfg.secret_key === "string" ? cfg.secret_key : "";
+  // The site's Paystack secret key — tenant-pasted in /admin/integrations.
+  const provider = await loadProvider(siteId, "paystack");
+  const secretKey = provider?.kind === "paystack" ? provider.secret_key : "";
   if (!secretKey) {
     return NextResponse.json({ ok: false, error: "Paystack not configured" }, { status: 400 });
   }
@@ -74,47 +92,38 @@ export async function POST(request: NextRequest) {
   const eventType   = event.event ?? "";
   const customer    = (data.customer as { email?: string; first_name?: string; last_name?: string } | undefined) ?? {};
   const amount      = Number((data.amount as number | undefined) ?? 0);
-  const fees        = Number((data.fees   as number | undefined) ?? 0);
   const providerRef = String((data.id     as number | string | undefined) ?? "");
-  const currency    = String((data.currency as string | undefined) ?? (order.notes as string) ?? "EUR").toUpperCase();
+  const currency    = String((data.currency as string | undefined) ?? order.notes ?? "EUR").toUpperCase();
+  const guestName   = [customer.first_name, customer.last_name].filter(Boolean).join(" ") || "there";
 
-  const baseRow = {
-    site_id:        siteId,
-    order_id:       orderId,
-    provider:       "paystack" as const,
-    provider_ref:   providerRef || null,
-    amount_cents:   amount,
-    currency,
-    customer_email: customer.email ?? null,
-    metadata:       { reference, fees, customer_name: [customer.first_name, customer.last_name].filter(Boolean).join(" ") || null },
-    raw_payload:    data,
-  };
+  // Load site brand/contact for emails
+  let siteName = "Store";
+  let adminEmail = "";
+  if (svc) {
+    const { data: settings } = await withSchema(svc, KODAGEN_SCHEMA)
+      .from("site_settings").select("business_name, primary_email").eq(FK_COL, siteId).maybeSingle();
+    siteName = (settings?.business_name as string) || "Store";
+    adminEmail = (settings?.primary_email as string) || "";
+  } else {
+    const anon = await createClient();
+    const { data: s0 } = await withSchema(anon, KODAGEN_SCHEMA).rpc("get_public_site", { p_slug: slug });
+    const s = (Array.isArray(s0) ? s0[0] : s0) as Record<string, unknown> | null;
+    siteName = (s?.business_name as string) || (s?.name as string) || "Store";
+    adminEmail = (s?.primary_email as string) || "";
+  }
 
-  // Load site settings for emails
-  const { data: settings } = await withSchema(supabase, KODAGEN_SCHEMA)
-    .from("site_settings")
-    .select("business_name, primary_email")
-    .eq(FK_COL, siteId)
-    .maybeSingle();
-
-  const siteName   = (settings?.business_name as string) || "Store";
-  const adminEmail = (settings?.primary_email  as string) || "";
-  const custEmail  = (order.notes as string) !== currency ? (customer.email ?? null) : null; // currency is in notes
   const guestEmail = customer.email ?? null;
-  const guestName  = [customer.first_name, customer.last_name].filter(Boolean).join(" ") || "there";
   const orderRef   = String(orderId).slice(0, 8).toUpperCase();
   const fmtMoney   = (cents: number) => fmtMoneyCents(cents, currency);
 
   if (eventType === "charge.success") {
-    const now = new Date().toISOString();
-    await supabase.from("transactions").upsert(
-      { ...baseRow, status: "succeeded", paid_at: now },
-      { onConflict: "site_id,provider,provider_ref" },
-    );
-    if (order.status !== "paid") {
-      await supabase.from("orders").update({ status: "paid", paid_at: now }).eq("id", orderId);
-    }
-    // Email customer: payment confirmed
+    await recordPayment(siteId, {
+      kind: "order", event: "paid", orderId,
+      provider: "paystack", providerRef: providerRef || reference,
+      amountCents: amount, currency,
+      customerEmail: guestEmail, customerName: guestName,
+      rawPayload: data,
+    });
     if (guestEmail) {
       const tmpl = orderPaymentConfirmedEmail({
         siteName,
@@ -128,11 +137,13 @@ export async function POST(request: NextRequest) {
     }
   } else if (eventType === "charge.failed") {
     const reason = String((data.gateway_response as string | undefined) ?? "Charge failed");
-    await supabase.from("transactions").upsert(
-      { ...baseRow, status: "failed", error_message: reason },
-      { onConflict: "site_id,provider,provider_ref" },
-    );
-    // Email customer: payment failed
+    await recordPayment(siteId, {
+      kind: "order", event: "failed", orderId,
+      provider: "paystack", providerRef: providerRef || reference,
+      amountCents: amount, currency,
+      customerEmail: guestEmail, customerName: guestName,
+      errorMessage: reason, rawPayload: data,
+    });
     if (guestEmail) {
       const tmpl = orderPaymentFailedEmail({
         siteName,
@@ -144,7 +155,6 @@ export async function POST(request: NextRequest) {
       sendEmail(siteId, { to: guestEmail, ...tmpl, tags: [{ name: "type", value: "payment-failed" }] })
         .catch((e) => console.error("[email] payment failed customer:", e));
     }
-    // Alert admin: payment failed
     if (adminEmail) {
       const tmpl = orderPaymentFailedAdminEmail({
         siteName,
@@ -159,11 +169,12 @@ export async function POST(request: NextRequest) {
         .catch((e) => console.error("[email] payment failed admin:", e));
     }
   } else if (eventType === "refund.processed") {
-    await supabase.from("transactions").upsert(
-      { ...baseRow, status: "refunded" },
-      { onConflict: "site_id,provider,provider_ref" },
-    );
-    await supabase.from("orders").update({ status: "cancelled" }).eq("id", orderId);
+    await recordPayment(siteId, {
+      kind: "order", event: "refunded", orderId,
+      provider: "paystack", providerRef: providerRef || reference,
+      amountCents: amount, currency,
+      customerEmail: guestEmail, rawPayload: data,
+    });
   }
 
   return NextResponse.json({ ok: true });

@@ -1,7 +1,7 @@
 import { FK_COL, KODAGEN_SCHEMA, BOOKING_SCHEMA, withSchema } from '@/lib/db-scope';
 import { redirect } from "next/navigation";
 import { headers } from "next/headers";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { getCurrentSite } from "@/lib/site-scope";
 import { loadSiteConfigFromDB } from "@/lib/load-site-config";
 import { getSidebarCounts } from "@/lib/admin-counts";
@@ -14,7 +14,7 @@ export default async function SecurityPage() {
   const ctx = await getCurrentSite();
   if (!ctx) redirect("/admin/login");
 
-  const supabase = createServiceClient();
+  const supabase = await createClient();
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 

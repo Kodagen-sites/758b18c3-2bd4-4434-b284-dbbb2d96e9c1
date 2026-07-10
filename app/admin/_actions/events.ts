@@ -1,7 +1,7 @@
 "use server";
 import { FK_COL, KODAGEN_SCHEMA, BOOKING_SCHEMA, withSchema } from '@/lib/db-scope';
 import { revalidatePath } from "next/cache";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { getCurrentSite } from "@/lib/site-scope";
 import { hasPermission } from "@/lib/audit";
 import { CURRENCY_CODE } from "@/lib/currency";
@@ -39,7 +39,7 @@ export async function createEvent(_: ActionResult | null, fd: FormData): Promise
     if (!name) return { ok: false, error: "Event name is required." };
     if (!Number.isFinite(price) || price < 0) return { ok: false, error: "Invalid price." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
     const { data, error } = await withSchema(supabase, BOOKING_SCHEMA).from("resources").insert({
       site_id: ctx.siteId,
       type: name,
@@ -80,7 +80,7 @@ export async function updateEvent(_: ActionResult | null, fd: FormData): Promise
     if (!id) return { ok: false, error: "Missing id." };
     if (!name) return { ok: false, error: "Event name is required." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
     const { error } = await withSchema(supabase, BOOKING_SCHEMA).from("resources").update({
       type: name,
       name,
@@ -104,7 +104,7 @@ export async function deleteEvent(_: ActionResult | null, fd: FormData): Promise
     const id = String(fd.get("id") ?? "");
     if (!id) return { ok: false, error: "Missing id." };
 
-    const supabase = createServiceClient();
+    const supabase = await createClient();
 
     // Check for active bookings
     const { count } = await withSchema(supabase, BOOKING_SCHEMA).from("bookings")

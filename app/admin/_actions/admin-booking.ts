@@ -1,7 +1,7 @@
 "use server";
 import { FK_COL, KODAGEN_SCHEMA, BOOKING_SCHEMA, withSchema } from '@/lib/db-scope';
 import { revalidatePath } from "next/cache";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { getCurrentSite } from "@/lib/site-scope";
 import { services } from "@kodagen/booking-engine";
 import { sendEmail } from "@/lib/email/send";
@@ -40,7 +40,7 @@ export async function createAdminBooking(_: BookingResult | null, fd: FormData):
     return { ok: false, error: "Check-out must be after check-in." };
   }
 
-  const supabase = createServiceClient();
+  const supabase = await createClient();
 
   // Get room details for pricing
   const { data: resource } = await withSchema(supabase, BOOKING_SCHEMA).from("resources")

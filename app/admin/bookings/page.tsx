@@ -1,6 +1,6 @@
 import { FK_COL, KODAGEN_SCHEMA, BOOKING_SCHEMA, withSchema } from '@/lib/db-scope';
 import { redirect } from "next/navigation";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { getCurrentSite } from "@/lib/site-scope";
 import { services } from "@kodagen/booking-engine";
 import { loadSiteConfigFromDB } from "@/lib/load-site-config";
@@ -23,10 +23,7 @@ export default async function BookingsPage() {
   const ctx = await getCurrentSite();
   if (!ctx) redirect("/admin/login");
 
-  // Service-role client: session is verified by middleware + getCurrentSite,
-  // siteId is passed explicitly into every engine call. RLS still protects the
-  // anon path; admin reads bypass to avoid needing a site_id JWT claim hook.
-  const supabase = createServiceClient();
+  const supabase = await createClient();
 
   const [engineBookings, resources, customers, config, counts, { data: transactions }] = await Promise.all([
     services.listBookings(supabase, ctx.siteId, { limit: 200 }),

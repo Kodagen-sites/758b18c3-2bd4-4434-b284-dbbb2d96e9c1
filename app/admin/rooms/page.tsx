@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { createServiceClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { getCurrentSite } from "@/lib/site-scope";
 import { services } from "@kodagen/booking-engine";
 import { loadSiteConfigFromDB } from "@/lib/load-site-config";
@@ -20,9 +20,7 @@ export default async function RoomsPage() {
   const ctx = await getCurrentSite();
   if (!ctx) redirect("/admin/login");
 
-  // Service-role client — admin reads bypass RLS so we don't need a site_id
-  // JWT hook. Site scope is enforced explicitly via ctx.siteId in every query.
-  const supabase = createServiceClient();
+  const supabase = await createClient();
   const now = new Date().toISOString();
   const [allResources, activeBookings, confirmedBookings, customers, config, counts] = await Promise.all([
     services.listResources(supabase, ctx.siteId),
