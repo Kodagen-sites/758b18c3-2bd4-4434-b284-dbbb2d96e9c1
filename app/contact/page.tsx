@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Mail, Phone, MapPin, Clock } from "lucide-react";
 import PageHero from "@/components/PageHero";
 import { siteConfig } from "@/content/site-config";
+import { getSiteContent } from "@/lib/site-content";
 import { assetImage } from "@/lib/resolve-asset";
 import { FadeUp } from "@/components/motion";
 import BookNowButton from "@/components/BookNowButton";
@@ -16,9 +17,12 @@ export const metadata: Metadata = {
 
 const brand = { ...siteConfig.company, url: siteConfig.seo.siteUrl, socials: siteConfig.socials };
 
-export default function ContactPage() {
+export default async function ContactPage() {
   const sd = siteConfig.seo.structuredData;
-  const { email, phone, location } = siteConfig.company;
+  const cms = await getSiteContent();
+  const email = cms?.contact?.email || siteConfig.company.email;
+  const phone = cms?.contact?.phone || siteConfig.company.phone;
+  const location = cms?.contact?.address || siteConfig.company.location;
   return (
     <>
       <SEOHead

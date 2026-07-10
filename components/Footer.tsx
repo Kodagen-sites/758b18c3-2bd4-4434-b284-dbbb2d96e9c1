@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Mail, Phone, MapPin, ArrowUpRight } from "lucide-react";
 import { siteConfig } from "@/content/site-config";
+import { getSiteContent } from "@/lib/site-content";
 import { SocialLinks } from "@/components/social-icons";
 
 /**
@@ -45,8 +46,11 @@ function ServiceLinks({ limit = 5 }: { limit?: number }) {
   );
 }
 
-function ContactList() {
-  const { email, phone, location } = siteConfig.company;
+async function ContactList() {
+  const cms = await getSiteContent();
+  const email = cms?.contact?.email || siteConfig.company.email;
+  const phone = cms?.contact?.phone || siteConfig.company.phone;
+  const location = cms?.contact?.address || siteConfig.company.location;
   return (
     <ul className="space-y-3 text-sm text-white/70">
       {email && (

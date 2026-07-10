@@ -1,0 +1,593 @@
+"use client";
+
+import { useActionState, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import AdminShell from "@/components/admin/admin-shell";
+import { useAdminTheme } from "@/lib/admin-theme";
+import { getAdminStyles } from "@/lib/admin-styles";
+import ImagePickerModal from "@/components/admin/image-picker-modal";
+import type { SiteConfig } from "@/lib/types";
+import {
+  Save, Sparkles, FileText, Phone, Search, AlertCircle, CheckCircle,
+  Image as ImageIcon, ImagePlus, Plus, X, Trash2, Layers, Wifi,
+} from "lucide-react";
+import {
+  saveBusinessIdentity, saveHero, saveAbout, saveContact, saveSEO,
+  saveServices, saveGallery, saveFooter, saveWifi,
+  type SaveResult,
+} from "../_actions/site-config";
+
+type Cfg = Record<string, unknown>;
+type ServiceExtra = { name: string; description: string; price: string; image: string; icon?: string };
+
+const get = (o: Cfg, ...keys: string[]): string => {
+  let cur: unknown = o;
+  for (const k of keys) cur = (cur as Cfg | undefined)?.[k];
+  return typeof cur === "string" ? cur : "";
+};
+const getArr = (o: Cfg, ...keys: string[]): string[] => {
+  let cur: unknown = o;
+  for (const k of keys) cur = (cur as Cfg | undefined)?.[k];
+  return Array.isArray(cur) ? (cur as string[]) : [];
+};
+const getExtras = (o: Cfg): ServiceExtra[] => {
+  const raw = (o as { servicesExtras?: unknown }).servicesExtras;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null)
+    .map((x) => ({
+      name: typeof x.name === "string" ? x.name : "",
+      description: typeof x.description === "string" ? x.description : "",
+      price: typeof x.price === "string" ? x.price : "",
+      image: typeof x.image === "string" ? x.image : "",
+      icon: typeof x.icon === "string" ? x.icon : undefined,
+    }));
+};
+
+function Banner({ result }: { result: SaveResult | null }) {
+  if (!result) return null;
+  if (result.ok) {
+    return (
+      <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+        className="flex items-center gap-2 px-3 py-2 rounded-lg bg-green-50 border border-green-200 text-xs font-semibold text-green-700">
+        <CheckCircle className="w-3.5 h-3.5" /> Saved · changes are live.
+      </motion.div>
+    );
+  }
+  return (
+    <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-xs font-semibold text-red-700">
+      <AlertCircle className="w-3.5 h-3.5" /> {result.error}
+    </motion.div>
+  );
+}
+
+function ContentForm({ config }: { config: Cfg }) {
+  const { theme } = useAdminTheme();
+  const dark = theme === "dark";
+  const s = getAdminStyles(dark);
+  const inputCls = `w-full px-4 py-3 rounded-xl border text-sm focus:outline-none focus:ring-1 transition ${s.inputBg} ${s.inputRing}`;
+
+  const [bizState, bizAction, bizPending]     = useActionState<SaveResult | null, FormData>(saveBusinessIdentity, null);
+  const [heroState, heroAction, heroPending]  = useActionState<SaveResult | null, FormData>(saveHero, null);
+  const [aboutState, aboutAction, aboutPending] = useActionState<SaveResult | null, FormData>(saveAbout, null);
+  const [servicesState, servicesAction, servicesPending] = useActionState<SaveResult | null, FormData>(saveServices, null);
+  const [galleryState, galleryAction, galleryPending] = useActionState<SaveResult | null, FormData>(saveGallery, null);
+  const [contactState, contactAction, contactPending] = useActionState<SaveResult | null, FormData>(saveContact, null);
+  const [footerState, footerAction, footerPending] = useActionState<SaveResult | null, FormData>(saveFooter, null);
+  const [wifiState, wifiAction, wifiPending] = useActionState<SaveResult | null, FormData>(saveWifi, null);
+  const [seoState, seoAction, seoPending]     = useActionState<SaveResult | null, FormData>(saveSEO, null);
+
+  // Local editable state for the non-bookable amenities (Pool, Restaurant, …).
+  // Serialised to JSON in a hidden input on the Services form submit.
+  const [extras, setExtras] = useState<ServiceExtra[]>(() => getExtras(config));
+  const [pickerForExtra, setPickerForExtra] = useState<number | null>(null);
+
+  // Brand identity image fields — controlled so the picker can update them.
+  const [logoUrl, setLogoUrl] = useState<string>(() => get(config, "logo", "path"));
+  const [logoAlt, setLogoAlt] = useState<string>(() => get(config, "logo", "alt"));
+  const [faviconUrl, setFaviconUrl] = useState<string>(() => get(config, "favicon"));
+  const [brandPicker, setBrandPicker] = useState<"logo" | "favicon" | null>(null);
+
+  function updateExtra(i: number, patch: Partial<ServiceExtra>) {
+    setExtras((prev) => prev.map((e, idx) => (idx === i ? { ...e, ...patch } : e)));
+  }
+  function addExtra() {
+    setExtras((prev) => [...prev, { name: "", description: "", price: "", image: "" }]);
+  }
+  function removeExtra(i: number) {
+    setExtras((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
+  // Tab navigation — one section per tab so the page isn't a long scroll.
+  type TabId = "brand" | "hero" | "about" | "services" | "gallery" | "contact" | "footer" | "seo" | "wifi";
+  const TABS: { id: TabId; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+    { id: "brand",    label: "Brand",    icon: Sparkles },
+    { id: "hero",     label: "Hero",     icon: FileText },
+    { id: "about",    label: "About",    icon: FileText },
+    { id: "services", label: "Services", icon: Layers },
+    { id: "gallery",  label: "Gallery",  icon: ImageIcon },
+    { id: "contact",  label: "Contact",  icon: Phone },
+    { id: "footer",   label: "Footer",   icon: FileText },
+    { id: "seo",      label: "SEO",      icon: Search },
+    { id: "wifi",     label: "WiFi",     icon: Wifi },
+  ];
+  const [tab, setTab] = useState<TabId>("brand");
+
+  return (
+    <div className="p-5 sm:p-6 lg:p-8 space-y-6 overflow-hidden max-w-4xl">
+      <div>
+        <h1 className={`text-2xl font-bold ${s.textPrimary}`}>Content</h1>
+        <p className={`text-sm mt-1 ${s.textSecondary}`}>Edit copy on your live website. Changes save immediately.</p>
+      </div>
+
+      <AnimatePresence>
+        {pickerForExtra !== null && (
+          <ImagePickerModal
+            initialUrl={extras[pickerForExtra]?.image ?? ""}
+            onPick={(url) => updateExtra(pickerForExtra, { image: url })}
+            onClose={() => setPickerForExtra(null)}
+          />
+        )}
+        {brandPicker === "logo" && (
+          <ImagePickerModal
+            initialUrl={logoUrl}
+            onPick={(url) => setLogoUrl(url)}
+            onClose={() => setBrandPicker(null)}
+          />
+        )}
+        {brandPicker === "favicon" && (
+          <ImagePickerModal
+            initialUrl={faviconUrl}
+            onPick={(url) => setFaviconUrl(url)}
+            onClose={() => setBrandPicker(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Tab strip */}
+      <div className={`flex items-center gap-1 p-1 rounded-2xl border ${s.cardBorder} ${s.cardBg} overflow-x-auto`}>
+        {TABS.map((t) => {
+          const Icon = t.icon;
+          const active = tab === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+                active
+                  ? "text-white shadow-sm"
+                  : `${s.textSecondary} ${s.hoverBg}`
+              }`}
+              style={active ? { background: `linear-gradient(135deg, var(--color-accent), var(--color-primary))` } : undefined}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Business Identity */}
+      {tab === "brand" && (
+      <form action={bizAction} className={`${s.cardBg} rounded-2xl border ${s.cardBorder} p-6 space-y-4`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-[var(--color-accent)]" />
+            <h2 className={`text-base font-bold ${s.textPrimary}`}>Brand identity</h2>
+          </div>
+          <Banner result={bizState} />
+        </div>
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Business name</label>
+          <input name="businessName" defaultValue={get(config, "businessName")} required className={inputCls} />
+        </div>
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Tagline</label>
+          <input name="tagline" defaultValue={get(config, "tagline")} className={inputCls} placeholder="Where every stay feels like a private island." />
+        </div>
+
+        {/* Logo */}
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Logo</label>
+          <input type="hidden" name="logoUrl" value={logoUrl} />
+          <input type="hidden" name="logoAlt" value={logoAlt} />
+          {logoUrl ? (
+            <div className="flex items-center gap-3">
+              <div className={`relative w-32 h-20 rounded-xl overflow-hidden border ${s.cardBorder} ${dark ? "bg-white/[0.04]" : "bg-gray-50"} flex items-center justify-center`}>
+                <img src={logoUrl} alt={logoAlt || "Logo"} className="max-w-full max-h-full object-contain p-2" />
+              </div>
+              <div className="flex-1 space-y-2">
+                <input
+                  type="text"
+                  value={logoAlt}
+                  onChange={(e) => setLogoAlt(e.target.value)}
+                  placeholder="Logo alt text (for accessibility)"
+                  className={inputCls}
+                />
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setBrandPicker("logo")}
+                    className={`px-3 py-2 rounded-lg text-xs font-semibold border ${s.cardBorder} ${s.hoverBg} ${s.textSecondary}`}>
+                    Change logo
+                  </button>
+                  <button type="button" onClick={() => { setLogoUrl(""); setLogoAlt(""); }}
+                    className="px-3 py-2 rounded-lg text-xs font-semibold border border-red-500/20 text-red-500 hover:bg-red-500/10">
+                    Remove
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <button type="button" onClick={() => setBrandPicker("logo")}
+              className={`w-full flex items-center justify-center gap-2 py-6 rounded-xl border-2 border-dashed text-sm font-medium ${dark ? "border-white/[0.08] text-gray-500 hover:border-white/[0.15]" : "border-gray-200 text-gray-500 hover:border-gray-300"} transition-colors`}>
+              <ImageIcon className="w-4 h-4" />
+              Choose logo from media library or upload
+            </button>
+          )}
+          <p className={`text-[11px] mt-1.5 ${s.textMuted}`}>Recommended: transparent PNG, ~200×60px. Shown in the header on every page.</p>
+        </div>
+
+        {/* Favicon */}
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Favicon</label>
+          <input type="hidden" name="favicon" value={faviconUrl} />
+          {faviconUrl ? (
+            <div className="flex items-center gap-3">
+              <div className={`relative w-12 h-12 rounded-xl overflow-hidden border ${s.cardBorder} ${dark ? "bg-white/[0.04]" : "bg-gray-50"} flex items-center justify-center`}>
+                <img src={faviconUrl} alt="Favicon" className="w-8 h-8 object-contain" />
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setBrandPicker("favicon")}
+                  className={`px-3 py-2 rounded-lg text-xs font-semibold border ${s.cardBorder} ${s.hoverBg} ${s.textSecondary}`}>
+                  Change favicon
+                </button>
+                <button type="button" onClick={() => setFaviconUrl("")}
+                  className="px-3 py-2 rounded-lg text-xs font-semibold border border-red-500/20 text-red-500 hover:bg-red-500/10">
+                  Remove
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button type="button" onClick={() => setBrandPicker("favicon")}
+              className={`w-full flex items-center justify-center gap-2 py-6 rounded-xl border-2 border-dashed text-sm font-medium ${dark ? "border-white/[0.08] text-gray-500 hover:border-white/[0.15]" : "border-gray-200 text-gray-500 hover:border-gray-300"} transition-colors`}>
+              <ImageIcon className="w-4 h-4" />
+              Choose favicon from media library or upload
+            </button>
+          )}
+          <p className={`text-[11px] mt-1.5 ${s.textMuted}`}>The little icon shown in the browser tab. Square PNG/SVG/ICO, 32×32 or 64×64px.</p>
+        </div>
+
+        <button type="submit" disabled={bizPending}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-white font-bold text-sm transition hover:scale-[1.02] disabled:opacity-60"
+          style={{ background: `linear-gradient(135deg, var(--color-accent), var(--color-primary))` }}>
+          <Save className="w-4 h-4" /> {bizPending ? "Saving…" : "Save brand"}
+        </button>
+      </form>
+      )}
+
+      {/* Hero */}
+      {tab === "hero" && (
+      <form action={heroAction} className={`${s.cardBg} rounded-2xl border ${s.cardBorder} p-6 space-y-4`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileText className="w-4 h-4 text-[var(--color-accent)]" />
+            <h2 className={`text-base font-bold ${s.textPrimary}`}>Hero section</h2>
+          </div>
+          <Banner result={heroState} />
+        </div>
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Headline</label>
+          <input name="headline" defaultValue={get(config, "hero", "headline")} required className={inputCls} />
+        </div>
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Subheadline</label>
+          <textarea name="subheadline" rows={2} defaultValue={get(config, "hero", "subheadline")} className={`${inputCls} resize-none`} />
+        </div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>CTA button text</label>
+            <input name="ctaText" defaultValue={get(config, "hero", "ctaText")} className={inputCls} placeholder="Reserve a room" />
+          </div>
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>CTA link</label>
+            <input name="ctaLink" defaultValue={get(config, "hero", "ctaLink")} className={inputCls} placeholder="#book or https://…" />
+          </div>
+        </div>
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Background image URL</label>
+          <input name="backgroundImage" defaultValue={get(config, "hero", "backgroundImage")} className={inputCls} placeholder="https://…" />
+          <p className={`text-[11px] mt-1.5 ${s.textMuted}`}>Tip: upload to Media first, then paste the URL here. Or use Generate AI hero (coming soon).</p>
+        </div>
+        <button type="submit" disabled={heroPending}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-white font-bold text-sm transition hover:scale-[1.02] disabled:opacity-60"
+          style={{ background: `linear-gradient(135deg, var(--color-accent), var(--color-primary))` }}>
+          <Save className="w-4 h-4" /> {heroPending ? "Saving…" : "Save hero"}
+        </button>
+      </form>
+      )}
+
+      {/* About */}
+      {tab === "about" && (
+      <form action={aboutAction} className={`${s.cardBg} rounded-2xl border ${s.cardBorder} p-6 space-y-4`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileText className="w-4 h-4 text-[var(--color-accent)]" />
+            <h2 className={`text-base font-bold ${s.textPrimary}`}>About section</h2>
+          </div>
+          <Banner result={aboutState} />
+        </div>
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Section title</label>
+          <input name="title" defaultValue={get(config, "about", "title")} className={inputCls} />
+        </div>
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Story (one paragraph per line)</label>
+          <textarea name="paragraphs" rows={6} defaultValue={getArr(config, "about", "paragraphs").join("\n")} className={`${inputCls} resize-y`} />
+        </div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Mission</label>
+            <textarea name="mission" rows={2} defaultValue={get(config, "about", "mission")} className={`${inputCls} resize-none`} />
+          </div>
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Vision</label>
+            <textarea name="vision" rows={2} defaultValue={get(config, "about", "vision")} className={`${inputCls} resize-none`} />
+          </div>
+        </div>
+        <button type="submit" disabled={aboutPending}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-white font-bold text-sm transition hover:scale-[1.02] disabled:opacity-60"
+          style={{ background: `linear-gradient(135deg, var(--color-accent), var(--color-primary))` }}>
+          <Save className="w-4 h-4" /> {aboutPending ? "Saving…" : "Save about"}
+        </button>
+      </form>
+      )}
+
+      {/* Services / Rooms section */}
+      {tab === "services" && (
+      <form action={servicesAction} className={`${s.cardBg} rounded-2xl border ${s.cardBorder} p-6 space-y-4`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Layers className="w-4 h-4 text-[var(--color-accent)]" />
+            <h2 className={`text-base font-bold ${s.textPrimary}`}>Services / Rooms section</h2>
+          </div>
+          <Banner result={servicesState} />
+        </div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Section title</label>
+            <input name="title" defaultValue={get(config, "services", "title")} className={inputCls} placeholder="Our Rooms & Suites" />
+          </div>
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Subtitle</label>
+            <input name="subtitle" defaultValue={get(config, "services", "subtitle")} className={inputCls} placeholder="Discover your perfect retreat" />
+          </div>
+        </div>
+
+        <div className="pt-2">
+          <p className={`text-[11px] ${s.textMuted} mb-3`}>
+            Bookable rooms are managed in <strong>/admin/rooms</strong>. Add non-bookable amenities (pool, restaurant, conference) below — they show on /services alongside the rooms.
+          </p>
+          <div className="space-y-3">
+            {extras.map((ex, i) => (
+              <div key={i} className={`p-3 rounded-xl border ${s.cardBorder} ${s.sectionBg} space-y-3`}>
+                <div className="flex items-start gap-3">
+                  <button type="button" onClick={() => setPickerForExtra(i)}
+                    className="flex-shrink-0 w-20 h-20 rounded-lg overflow-hidden border border-dashed border-gray-300 dark:border-white/10 flex items-center justify-center group">
+                    {ex.image ? (
+                      <img src={ex.image} alt={ex.name || "amenity"} className="w-full h-full object-cover" />
+                    ) : (
+                      <ImagePlus className={`w-6 h-6 ${s.textMuted} group-hover:text-[var(--color-accent)]`} />
+                    )}
+                  </button>
+                  <div className="flex-1 grid sm:grid-cols-2 gap-2">
+                    <input value={ex.name} onChange={(e) => updateExtra(i, { name: e.target.value })}
+                      placeholder="Amenity name (e.g. Rooftop Pool)" className={inputCls} />
+                    <input value={ex.price} onChange={(e) => updateExtra(i, { price: e.target.value })}
+                      placeholder="Price (e.g. ₦15,000 or Complimentary)" className={inputCls} />
+                  </div>
+                  <button type="button" onClick={() => removeExtra(i)}
+                    className={`p-2 rounded-lg ${s.hoverBg}`} title="Remove amenity">
+                    <Trash2 className="w-4 h-4 text-red-500" />
+                  </button>
+                </div>
+                <textarea value={ex.description} onChange={(e) => updateExtra(i, { description: e.target.value })}
+                  rows={2} placeholder="Short description shown on /services"
+                  className={`${inputCls} resize-none`} />
+              </div>
+            ))}
+          </div>
+          <button type="button" onClick={addExtra}
+            className={`mt-3 inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border ${s.cardBorder} ${s.hoverBg} ${s.textSecondary}`}>
+            <Plus className="w-3.5 h-3.5" /> Add amenity
+          </button>
+        </div>
+
+        <input type="hidden" name="servicesExtras" value={JSON.stringify(extras)} />
+        <button type="submit" disabled={servicesPending}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-white font-bold text-sm transition hover:scale-[1.02] disabled:opacity-60"
+          style={{ background: `linear-gradient(135deg, var(--color-accent), var(--color-primary))` }}>
+          <Save className="w-4 h-4" /> {servicesPending ? "Saving…" : "Save services"}
+        </button>
+      </form>
+      )}
+
+      {/* Gallery section */}
+      {tab === "gallery" && (
+      <form action={galleryAction} className={`${s.cardBg} rounded-2xl border ${s.cardBorder} p-6 space-y-4`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ImageIcon className="w-4 h-4 text-[var(--color-accent)]" />
+            <h2 className={`text-base font-bold ${s.textPrimary}`}>Gallery section</h2>
+          </div>
+          <Banner result={galleryState} />
+        </div>
+        <p className={`text-[11px] ${s.textMuted}`}>
+          Pictures are managed in <strong>/admin/media</strong> — every uploaded image appears on /gallery automatically.
+        </p>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Section title</label>
+            <input name="title" defaultValue={get(config, "gallery", "title")} className={inputCls} placeholder="See Our World" />
+          </div>
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Subtitle</label>
+            <input name="subtitle" defaultValue={get(config, "gallery", "subtitle")} className={inputCls} placeholder="A glimpse into the experience" />
+          </div>
+        </div>
+        <button type="submit" disabled={galleryPending}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-white font-bold text-sm transition hover:scale-[1.02] disabled:opacity-60"
+          style={{ background: `linear-gradient(135deg, var(--color-accent), var(--color-primary))` }}>
+          <Save className="w-4 h-4" /> {galleryPending ? "Saving…" : "Save gallery"}
+        </button>
+      </form>
+      )}
+
+      {/* Contact */}
+      {tab === "contact" && (
+      <form action={contactAction} className={`${s.cardBg} rounded-2xl border ${s.cardBorder} p-6 space-y-4`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Phone className="w-4 h-4 text-[var(--color-accent)]" />
+            <h2 className={`text-base font-bold ${s.textPrimary}`}>Contact section</h2>
+          </div>
+          <Banner result={contactState} />
+        </div>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Title</label>
+            <input name="title" defaultValue={get(config, "contact", "title")} className={inputCls} />
+          </div>
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Subtitle</label>
+            <input name="subtitle" defaultValue={get(config, "contact", "subtitle")} className={inputCls} />
+          </div>
+        </div>
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Address</label>
+          <input name="address" defaultValue={get(config, "contact", "address")} className={inputCls} />
+        </div>
+        <div className="grid sm:grid-cols-3 gap-4">
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Phone</label>
+            <input name="phone" defaultValue={get(config, "contact", "phone")} className={inputCls} />
+          </div>
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Email</label>
+            <input name="email" type="email" defaultValue={get(config, "contact", "email")} className={inputCls} />
+          </div>
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Hours</label>
+            <input name="hours" defaultValue={get(config, "contact", "hours")} className={inputCls} />
+          </div>
+        </div>
+        <button type="submit" disabled={contactPending}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-white font-bold text-sm transition hover:scale-[1.02] disabled:opacity-60"
+          style={{ background: `linear-gradient(135deg, var(--color-accent), var(--color-primary))` }}>
+          <Save className="w-4 h-4" /> {contactPending ? "Saving…" : "Save contact"}
+        </button>
+      </form>
+      )}
+
+      {/* Footer */}
+      {/* WiFi & QR */}
+      {tab === "wifi" && (
+      <form action={wifiAction} className={`${s.cardBg} rounded-2xl border ${s.cardBorder} p-6 space-y-4`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Wifi className="w-4 h-4 text-[var(--color-accent)]" />
+            <h2 className={`text-base font-bold ${s.textPrimary}`}>WiFi & Room Concierge</h2>
+          </div>
+          <Banner result={wifiState} />
+        </div>
+        <p className={`text-xs ${s.textMuted}`}>
+          Each room has a QR code. When guests scan it, they see your WiFi password, checkout time, room service menu, and can call reception. The system silently logs every scan for anti-fraud occupancy verification.
+        </p>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>WiFi network name</label>
+            <input name="wifiName" defaultValue={(() => { const w = (config as Record<string, unknown>).wifi as Record<string, unknown> | undefined; return typeof w?.name === "string" ? w.name : ""; })()} className={inputCls} placeholder="GrandRoyale_Guest" />
+          </div>
+          <div>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>WiFi password</label>
+            <input name="wifiPassword" defaultValue={(() => { const w = (config as Record<string, unknown>).wifi as Record<string, unknown> | undefined; return typeof w?.password === "string" ? w.password : ""; })()} className={inputCls} placeholder="Welcome2026!" />
+          </div>
+        </div>
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Room service menu link (optional)</label>
+          <input name="roomServiceMenu" defaultValue={typeof (config as Record<string, unknown>).roomServiceMenu === "string" ? (config as Record<string, unknown>).roomServiceMenu as string : ""} className={inputCls} placeholder="https://your-menu-link.com or leave blank" />
+          <p className={`text-[11px] mt-1.5 ${s.textMuted}`}>Link to your digital menu (Google Docs, PDF, or any URL). Guests see a "Room service" button.</p>
+        </div>
+        <button type="submit" disabled={wifiPending}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-white font-bold text-sm transition hover:scale-[1.02] disabled:opacity-60"
+          style={{ background: `linear-gradient(135deg, var(--color-accent), var(--color-primary))` }}>
+          <Save className="w-4 h-4" /> {wifiPending ? "Saving…" : "Save WiFi settings"}
+        </button>
+      </form>
+      )}
+
+      {tab === "footer" && (
+      <form action={footerAction} className={`${s.cardBg} rounded-2xl border ${s.cardBorder} p-6 space-y-4`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FileText className="w-4 h-4 text-[var(--color-accent)]" />
+            <h2 className={`text-base font-bold ${s.textPrimary}`}>Footer</h2>
+          </div>
+          <Banner result={footerState} />
+        </div>
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Copyright text</label>
+          <input name="copyrightText" defaultValue={get(config, "footer", "copyrightText")} className={inputCls}
+            placeholder={`© ${new Date().getFullYear()} Your Brand. All rights reserved.`} />
+        </div>
+        <button type="submit" disabled={footerPending}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-white font-bold text-sm transition hover:scale-[1.02] disabled:opacity-60"
+          style={{ background: `linear-gradient(135deg, var(--color-accent), var(--color-primary))` }}>
+          <Save className="w-4 h-4" /> {footerPending ? "Saving…" : "Save footer"}
+        </button>
+      </form>
+      )}
+
+      {/* SEO */}
+      {tab === "seo" && (
+      <form action={seoAction} className={`${s.cardBg} rounded-2xl border ${s.cardBorder} p-6 space-y-4`}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Search className="w-4 h-4 text-[var(--color-accent)]" />
+            <h2 className={`text-base font-bold ${s.textPrimary}`}>SEO</h2>
+          </div>
+          <Banner result={seoState} />
+        </div>
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Meta title</label>
+          <input name="metaTitle" defaultValue={get(config, "seo", "metaTitle")} className={inputCls} />
+        </div>
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Meta description</label>
+          <textarea name="metaDescription" rows={2} defaultValue={get(config, "seo", "metaDescription")} className={`${inputCls} resize-none`} />
+        </div>
+        <div>
+          <label className={`block text-xs font-semibold uppercase tracking-wider mb-2 ${s.textLabel}`}>Keywords (comma-separated)</label>
+          <input name="keywords" defaultValue={getArr(config, "seo", "keywords").join(", ")} className={inputCls} />
+        </div>
+        <button type="submit" disabled={seoPending}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-white font-bold text-sm transition hover:scale-[1.02] disabled:opacity-60"
+          style={{ background: `linear-gradient(135deg, var(--color-accent), var(--color-primary))` }}>
+          <Save className="w-4 h-4" /> {seoPending ? "Saving…" : "Save SEO"}
+        </button>
+      </form>
+      )}
+    </div>
+  );
+}
+
+export default function ContentView({
+  siteName, config, siteConfig, counts,
+}: { siteName: string; config: Cfg; siteConfig: SiteConfig; counts?: { bookings: number; inquiries: number } }) {
+  return (
+    <AdminShell config={siteConfig} counts={counts}>
+      <ContentForm config={config} />
+    </AdminShell>
+  );
+}
+

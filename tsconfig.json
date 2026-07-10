@@ -26,6 +26,12 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "@kodagen/booking-engine": [
+        "./lib/engines/booking"
+      ],
+      "@/components/admin/*": [
+        "./components/*"
       ]
     }
   },
