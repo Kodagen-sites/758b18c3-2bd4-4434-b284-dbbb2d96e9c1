@@ -671,12 +671,16 @@ function RoomDetailModal({
             className="fixed inset-0 z-[80] bg-black/55 backdrop-blur-sm"
             onClick={onClose}
           />
+          {/* Flex-wrapper centering — framer-motion writes an inline `transform`,
+              which silently kills Tailwind -translate-x/y-1/2 centering and left
+              the panel's lower half (incl. the submit button) off-screen. */}
+          <div className="fixed inset-0 z-[90] flex items-center justify-center p-4 pointer-events-none">
           <motion.div
             initial={{ opacity: 0, scale: 0.92, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.92, y: 20 }}
             transition={{ type: "spring", damping: 26, stiffness: 320 }}
-            className={`fixed z-[90] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[92vw] max-w-sm ${s.cardBg} rounded-2xl shadow-2xl overflow-hidden`}
+            className={`w-[92vw] max-w-sm ${s.cardBg} rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto pointer-events-auto`}
           >
             <div
               className="relative h-28"
@@ -722,6 +726,7 @@ function RoomDetailModal({
               )}
             </div>
           </motion.div>
+          </div>
         </>
       )}
     </AnimatePresence>

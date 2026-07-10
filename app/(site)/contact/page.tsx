@@ -6,6 +6,7 @@ import { getSiteContent } from "@/lib/site-content";
 import { assetImage } from "@/lib/resolve-asset";
 import { FadeUp } from "@/components/motion";
 import BookNowButton from "@/components/BookNowButton";
+import ContactEnquiryForm from "@/components/ContactEnquiryForm";
 import { SEOHead } from "@/components/seo/SEOHead";
 import { localBusinessSchema } from "@/lib/seo/structured-data";
 
@@ -97,6 +98,19 @@ export default async function ContactPage() {
                 </a>
                 .
               </p>
+            </div>
+          </FadeUp>
+        </div>
+
+        <div className="mx-auto mt-20 max-w-[1100px]">
+          <FadeUp>
+            <div className="rounded-3xl border border-cream/10 bg-cream/[0.03] p-8 md:p-10">
+              <h2 className="font-display text-3xl text-cream font-light mb-3">Send us a message</h2>
+              <p className="text-cream/70 mb-8">
+                Questions about a treatment, gift vouchers, or anything else — write to us and
+                we&apos;ll get back to you.
+              </p>
+              <ContactEnquiryForm />
             </div>
           </FadeUp>
         </div>

@@ -2,11 +2,6 @@ import type { Metadata } from "next";
 import { Fraunces, Nunito_Sans, Space_Mono } from "next/font/google";
 import "./globals.css";
 import { siteConfig } from "@/content/site-config";
-import Header from "@/components/headers/Header";
-import Footer from "@/components/Footer";
-import BookingFlow from "@/components/booking/BookingFlow";
-import { CookieConsent } from "@/components/CookieConsent";
-import ScrollProgress from "@/components/motion/ScrollProgress";
 
 const display = Fraunces({
   subsets: ["latin"],
@@ -63,13 +58,7 @@ export default function RootLayout({
       className={`${display.variable} ${body.variable} ${mono.variable}`}
     >
       <body className="bg-bg text-cream font-body antialiased">
-        {siteConfig.motion.scrollProgress && <ScrollProgress />}
-        <BookingFlow>
-          <Header />
-          <main>{children}</main>
-          <Footer />
-        </BookingFlow>
-        <CookieConsent />
+        {children}
       </body>
     </html>
   );

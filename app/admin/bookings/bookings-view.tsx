@@ -500,11 +500,15 @@ function NewBookingModal({
     <>
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
         className="fixed inset-0 z-[90] bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      {/* Flex-wrapper centering — framer-motion writes an inline `transform`,
+          which silently kills Tailwind -translate-x/y-1/2 centering and left
+          the panel's lower half (incl. the submit button) off-screen. */}
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 pointer-events-none">
       <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className={`fixed z-[100] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg ${s.cardBg} rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] overflow-y-auto`}
+        className={`w-full max-w-lg ${s.cardBg} rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto pointer-events-auto`}
       >
         <div className={`p-6 border-b ${s.borderLight} flex items-center justify-between`}>
           <div>
@@ -636,6 +640,7 @@ function NewBookingModal({
           </form>
         )}
       </motion.div>
+      </div>
     </>
   );
 }

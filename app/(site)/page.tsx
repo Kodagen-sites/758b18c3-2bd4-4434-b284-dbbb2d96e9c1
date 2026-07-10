@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { siteConfig } from "@/content/site-config";
+import { getSiteContent } from "@/lib/site-content";
 import { assetImage, heroVideo } from "@/lib/resolve-asset";
 import {
   FadeUp,
@@ -13,8 +14,10 @@ import { localBusinessSchema, websiteSchema } from "@/lib/seo/structured-data";
 
 const brand = { ...siteConfig.company, url: siteConfig.seo.siteUrl, socials: siteConfig.socials };
 
-export default function HomePage() {
+export default async function HomePage() {
   const sd = siteConfig.seo.structuredData;
+  const cms = await getSiteContent();
+  const cmsHeadline = cms?.hero?.headline || "";
   return (
     <div className="relative">
       <SEOHead
@@ -32,7 +35,7 @@ export default function HomePage() {
           }),
         ]}
       />
-      <VideoHeroSection />
+      <VideoHeroSection cmsHeadline={cmsHeadline} cmsTagline={cms?.tagline || ""} />
       <ImageMockupSection />
       <OversizedTypeSection />
       <ImageGridSection />
@@ -42,7 +45,7 @@ export default function HomePage() {
 }
 
 // ── Section 1 — VIDEO HERO (loop) ────────────────────────────────────
-function VideoHeroSection() {
+function VideoHeroSection({ cmsHeadline = "", cmsTagline = "" }: { cmsHeadline?: string; cmsTagline?: string }) {
   const video = heroVideo();
   const poster = assetImage("scene-1-start", "serene spa treatment room soft light");
   return (
@@ -69,17 +72,21 @@ function VideoHeroSection() {
 
       <div className="relative max-w-4xl text-center">
         <div className="font-mono text-[11px] tracking-[0.4em] text-primary/90 uppercase mb-6">
-          {siteConfig.company.tagline}
+          {cmsTagline || siteConfig.company.tagline}
         </div>
         <h1 className="font-display text-5xl md:text-7xl lg:text-8xl font-light leading-[0.98] text-cream">
-          {siteConfig.hero.h1.map((line, i) => (
-            <span
-              key={i}
-              className={`block ${line.accent ? "italic font-serif text-primary" : ""}`}
-            >
-              {line.text}
-            </span>
-          ))}
+          {cmsHeadline ? (
+            <span className="block">{cmsHeadline}</span>
+          ) : (
+            siteConfig.hero.h1.map((line, i) => (
+              <span
+                key={i}
+                className={`block ${line.accent ? "italic font-serif text-primary" : ""}`}
+              >
+                {line.text}
+              </span>
+            ))
+          )}
         </h1>
         <p className="mt-8 text-base md:text-lg text-cream/75 max-w-xl mx-auto">
           {siteConfig.company.description}

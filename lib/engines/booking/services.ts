@@ -1,11 +1,14 @@
 /**
  * Booking engine service layer — DB2 shared project variant.
  *
- * Uses the `public` schema (no .schema("booking") prefix).
- * All table names: resources, bookings, customers, availability, transactions.
- * Every function requires a service-role Supabase client (bypasses RLS).
+ * Shared (Kodagen DB2) mode: every table lives in the `booking` schema —
+ * `db()` scopes the client. Dedicated mode keeps the public schema.
+ * Works with the member/anon client (RLS) — no service key required.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
+
+const db = (s: SupabaseClient) =>
+  process.env.NEXT_PUBLIC_DB_MODE === "shared" ? s.schema("booking") : s;
 import {
   ALLOWED_TRANSITIONS,
   type Booking,
@@ -22,7 +25,7 @@ export async function listResources(
   siteId: string,
   opts: { active_only?: boolean } = {},
 ): Promise<Resource[]> {
-  let q = supabase.from("resources").select("*").eq("site_id", siteId);
+  let q = db(supabase).from("resources").select("*").eq("site_id", siteId);
   if (opts.active_only) q = q.eq("active", true);
   const { data, error } = await q.order("sort_order").order("created_at");
   if (error) throw new Error(`listResources: ${error.message}`);
@@ -34,7 +37,7 @@ export async function getResource(
   siteId: string,
   resourceId: string,
 ): Promise<Resource | null> {
-  const { data, error } = await supabase.from("resources")
+  const { data, error } = await db(supabase).from("resources")
     .select("*").eq("site_id", siteId).eq("id", resourceId).maybeSingle();
   if (error) throw new Error(`getResource: ${error.message}`);
   return (data ?? null) as Resource | null;
@@ -57,7 +60,7 @@ export async function listBookings(
   siteId: string,
   filters: BookingFilters = {},
 ): Promise<Booking[]> {
-  let q = supabase.from("bookings").select("*").eq("site_id", siteId);
+  let q = db(supabase).from("bookings").select("*").eq("site_id", siteId);
 
   if (filters.state) {
     if (Array.isArray(filters.state)) q = q.in("state", filters.state);
@@ -84,7 +87,7 @@ export async function getBooking(
   siteId: string,
   bookingId: string,
 ): Promise<Booking | null> {
-  const { data, error } = await supabase.from("bookings")
+  const { data, error } = await db(supabase).from("bookings")
     .select("*").eq("site_id", siteId).eq("id", bookingId).maybeSingle();
   if (error) throw new Error(`getBooking: ${error.message}`);
   return (data ?? null) as Booking | null;
@@ -101,12 +104,12 @@ export async function createBooking(
     const orFilters: string[] = [];
     if (input.customer.email) orFilters.push(`email.eq.${input.customer.email.toLowerCase()}`);
     if (input.customer.phone) orFilters.push(`phone.eq.${input.customer.phone}`);
-    const { data: existing } = await supabase.from("customers")
+    const { data: existing } = await db(supabase).from("customers")
       .select("id").eq("site_id", siteId).or(orFilters.join(",")).limit(1).maybeSingle();
     if (existing) {
       customerId = existing.id as string;
     } else {
-      const { data: created, error } = await supabase.from("customers")
+      const { data: created, error } = await db(supabase).from("customers")
         .insert({
           site_id: siteId,
           email: input.customer.email ?? null,
@@ -121,7 +124,7 @@ export async function createBooking(
   }
 
   // 2. Reserve availability (GiST exclusion prevents double-booking)
-  const { error: availErr } = await supabase.from("availability").insert({
+  const { error: availErr } = await db(supabase).from("availability").insert({
     site_id: siteId,
     resource_id: input.resource_id,
     start_at: input.start_at,
@@ -137,7 +140,7 @@ export async function createBooking(
 
   // 3. Create booking row
   const reference = `BKG-${Date.now().toString(36).toUpperCase()}`;
-  const { data, error } = await supabase.from("bookings")
+  const { data, error } = await db(supabase).from("bookings")
     .insert({
       site_id: siteId,
       resource_id: input.resource_id,
@@ -183,7 +186,7 @@ export async function transitionBookingState(
   if (newState === "cancelled") {
     update.cancelled_at = new Date().toISOString();
     if (reason) update.cancellation_reason = reason;
-    await supabase.from("availability").delete()
+    await db(supabase).from("availability").delete()
       .eq("site_id", siteId)
       .eq("resource_id", current.resource_id)
       .eq("start_at", current.start_at)
@@ -191,7 +194,7 @@ export async function transitionBookingState(
       .eq("status", "booked");
   }
 
-  const { data, error } = await supabase.from("bookings")
+  const { data, error } = await db(supabase).from("bookings")
     .update(update).eq("site_id", siteId).eq("id", bookingId).select("*").single();
   if (error) throw new Error(`transitionBookingState: ${error.message}`);
   return data as Booking;
@@ -206,20 +209,20 @@ export async function todayOps(supabase: SupabaseClient, siteId: string) {
   tomorrow.setDate(today.getDate() + 1);
 
   const [{ data: arrivals }, { data: departures }, { data: occupied }, { count: pending }] = await Promise.all([
-    supabase.from("bookings").select("*")
+    db(supabase).from("bookings").select("*")
       .eq("site_id", siteId)
       .in("state", ["confirmed", "active"])
       .gte("start_at", today.toISOString())
       .lt("start_at", tomorrow.toISOString()),
-    supabase.from("bookings").select("*")
+    db(supabase).from("bookings").select("*")
       .eq("site_id", siteId)
       .in("state", ["active", "confirmed"])
       .gte("end_at", today.toISOString())
       .lt("end_at", tomorrow.toISOString()),
-    supabase.from("bookings").select("*")
+    db(supabase).from("bookings").select("*")
       .eq("site_id", siteId)
       .eq("state", "active"),
-    supabase.from("bookings").select("*", { count: "exact", head: true })
+    db(supabase).from("bookings").select("*", { count: "exact", head: true })
       .eq("site_id", siteId)
       .eq("state", "pending"),
   ]);
@@ -239,7 +242,7 @@ export async function listCustomers(
   siteId: string,
   opts: { search?: string; limit?: number } = {},
 ): Promise<Customer[]> {
-  let q = supabase.from("customers").select("*").eq("site_id", siteId);
+  let q = db(supabase).from("customers").select("*").eq("site_id", siteId);
   if (opts.search) {
     const safe = opts.search.replace(/[%,()]/g, " ").trim();
     q = q.or(`full_name.ilike.%${safe}%,email.ilike.%${safe}%,phone.ilike.%${safe}%`);

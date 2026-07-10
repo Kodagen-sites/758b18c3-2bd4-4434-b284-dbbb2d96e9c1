@@ -66,11 +66,15 @@ export default function ImagePickerModal({
         className="fixed inset-0 z-[110] bg-black/60 backdrop-blur-sm"
         onClick={onClose}
       />
+      {/* Flex-wrapper centering — framer-motion writes an inline `transform`,
+          which silently kills Tailwind -translate-x/y-1/2 centering and left
+          the panel's lower half (incl. the submit button) off-screen. */}
+      <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 pointer-events-none">
       <motion.div
         initial={{ opacity: 0, scale: 0.96, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.96, y: 20 }}
-        className={`fixed z-[120] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[95vw] max-w-3xl h-[80vh] ${s.cardBg} rounded-2xl shadow-2xl flex flex-col overflow-hidden`}
+        className={`w-[95vw] max-w-3xl h-[80vh] ${s.cardBg} rounded-2xl shadow-2xl flex flex-col overflow-y-auto pointer-events-auto`}
       >
         {/* Header */}
         <div className={`p-5 border-b ${s.borderLight} flex items-center justify-between flex-shrink-0`}>
@@ -183,6 +187,7 @@ export default function ImagePickerModal({
           </div>
         </div>
       </motion.div>
+      </div>
     </>
   );
 }
