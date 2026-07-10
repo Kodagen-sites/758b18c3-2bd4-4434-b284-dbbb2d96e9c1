@@ -25,7 +25,7 @@
 
 import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
 import { siteConfig } from "@/content/site-config";
-import BookingDrawer, { type Room, type BookingDraft } from "./BookingDrawer";
+import BookingDrawer, { type Room, type BookingDraft, type BookingMode } from "./BookingDrawer";
 import BookingModal from "./BookingModal";
 import BookingInline from "./BookingInline";
 import BookingStickyBar from "./BookingStickyBar";
@@ -57,6 +57,10 @@ interface BookingFlowProps {
   locationName?: string;
   depositPercent?: number;
   onConfirm?: (booking: BookingDraft) => Promise<void>;
+  mode?: BookingMode;      // "stay" | "appointment"; omit → inferred from rooms
+  dayStart?: string;       // appointment mode: first bookable slot, "HH:mm"
+  dayEnd?: string;         // appointment mode: sessions must end by this
+  slotMinutes?: number;    // appointment mode: session length
 }
 
 export default function BookingFlow({
@@ -65,6 +69,10 @@ export default function BookingFlow({
   locationName,
   depositPercent,
   onConfirm,
+  mode,
+  dayStart,
+  dayEnd,
+  slotMinutes,
 }: BookingFlowProps) {
   const variant = (siteConfig as { bookingVariant?: BookingVariant }).bookingVariant ?? "B1";
   const roomList = rooms ?? (siteConfig as { rooms?: Room[] }).rooms ?? [];
@@ -98,6 +106,10 @@ export default function BookingFlow({
           defaultRoomSlug={defaultSlug}
           locationName={locationName}
           onConfirm={onConfirm}
+          mode={mode}
+          dayStart={dayStart}
+          dayEnd={dayEnd}
+          slotMinutes={slotMinutes}
         />
       ) : (
         <BookingDrawer
@@ -108,6 +120,10 @@ export default function BookingFlow({
           locationName={locationName}
           depositPercent={depositPercent}
           onConfirm={onConfirm}
+          mode={mode}
+          dayStart={dayStart}
+          dayEnd={dayEnd}
+          slotMinutes={slotMinutes}
         />
       )}
     </BookingTriggerContext.Provider>

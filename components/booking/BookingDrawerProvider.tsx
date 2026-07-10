@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, ReactNode, useCallback } from "react";
-import BookingDrawer, { Room, BookingDraft } from "./BookingDrawer";
+import BookingDrawer, { Room, BookingDraft, BookingMode } from "./BookingDrawer";
 
 /**
  * BookingDrawerProvider — wraps the App so any "Reserve" / "Book" button
@@ -53,6 +53,10 @@ type ProviderProps = {
   depositPercent?: number;
   paymentProvider?: "paystack" | "stripe" | "flutterwave";
   onConfirm?: (booking: BookingDraft) => Promise<void>;
+  mode?: BookingMode;      // "stay" | "appointment"; omit → inferred from rooms
+  dayStart?: string;       // appointment mode: first bookable slot, "HH:mm"
+  dayEnd?: string;         // appointment mode: sessions must end by this
+  slotMinutes?: number;    // appointment mode: session length
 };
 
 export default function BookingDrawerProvider({
@@ -62,6 +66,10 @@ export default function BookingDrawerProvider({
   depositPercent,
   paymentProvider,
   onConfirm,
+  mode,
+  dayStart,
+  dayEnd,
+  slotMinutes,
 }: ProviderProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [defaultSlug, setDefaultSlug] = useState<string | undefined>();
@@ -87,6 +95,10 @@ export default function BookingDrawerProvider({
         depositPercent={depositPercent}
         paymentProvider={paymentProvider}
         onConfirm={onConfirm}
+        mode={mode}
+        dayStart={dayStart}
+        dayEnd={dayEnd}
+        slotMinutes={slotMinutes}
       />
     </BookingDrawerContext.Provider>
   );

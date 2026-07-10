@@ -10,11 +10,20 @@ import { ChevronLeft, ChevronRight, Calendar as CalendarIcon } from "lucide-reac
  * - Hover preview shows the range as you move
  * - Past dates disabled
  * - Two-month side-by-side view on desktop, single month on mobile
+ * - `single` prop: one-date mode for appointment businesses — a single
+ *   "Date" field, one click selects (start === end) and closes.
  *
  * Output format: ISO yyyy-mm-dd strings. Empty string = unset.
+ * In single mode onChange fires with (iso, iso).
  *
  * Used by BookingDrawer. Replaces the type="date" failure pattern from
  * the Eko Heritage test (rule 33.4e).
+ *
+ * STYLING NOTE: all colors are Tailwind arbitrary values with CSS-variable
+ * fallbacks. Generated sites ship arbitrary tailwind token sets — a named
+ * token class missing from the config silently emits NO css and the
+ * calendar renders transparent. The hex fallbacks keep the popover opaque
+ * and the text readable under ANY tailwind config.
  */
 
 type Props = {
@@ -22,9 +31,10 @@ type Props = {
   endDate: string;
   onChange: (start: string, end: string) => void;
   minDate?: string;       // defaults to today
+  single?: boolean;       // appointment mode: pick ONE date (start === end)
 };
 
-export default function DateRangePicker({ startDate, endDate, onChange, minDate }: Props) {
+export default function DateRangePicker({ startDate, endDate, onChange, minDate, single }: Props) {
   const [open, setOpen] = useState(false);
   const [hoverDate, setHoverDate] = useState<string | null>(null);
   const [viewMonth, setViewMonth] = useState(() => {
@@ -33,9 +43,9 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate 
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
   const containerRef = useRef<HTMLDivElement>(null);
-  
+
   const today = minDate || todayISO();
-  
+
   // Close on outside click
   useEffect(() => {
     if (!open) return;
@@ -47,11 +57,17 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate 
     window.addEventListener("mousedown", onClick);
     return () => window.removeEventListener("mousedown", onClick);
   }, [open]);
-  
+
   // Click date handler
   const handleSelect = (iso: string) => {
     if (iso < today) return;
-    
+
+    if (single) {
+      onChange(iso, iso);
+      setTimeout(() => setOpen(false), 150);
+      return;
+    }
+
     if (!startDate || (startDate && endDate)) {
       // Start fresh
       onChange(iso, "");
@@ -68,28 +84,30 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate 
       setTimeout(() => setOpen(false), 150);
     }
   };
-  
+
   // For hover preview (range painting)
   const previewEnd = hoverDate && startDate && !endDate && hoverDate >= startDate ? hoverDate : endDate;
-  
+
   return (
     <div ref={containerRef} className="relative">
       {/* Trigger inputs (look like inputs, are buttons) */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className={`grid ${single ? "grid-cols-1" : "grid-cols-2"} gap-2`}>
         <DateField
-          label="Check in"
+          label={single ? "Date" : "Check in"}
           value={startDate}
           onClick={() => setOpen(true)}
           active={open}
         />
-        <DateField
-          label="Check out"
-          value={endDate}
-          onClick={() => setOpen(true)}
-          active={open}
-        />
+        {!single && (
+          <DateField
+            label="Check out"
+            value={endDate}
+            onClick={() => setOpen(true)}
+            active={open}
+          />
+        )}
       </div>
-      
+
       {/* Calendar popover */}
       <AnimatePresence>
         {open && (
@@ -98,14 +116,14 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate 
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.15 }}
-            className="absolute top-full left-0 right-0 mt-2 z-50 bg-card border border-border/40 rounded-2xl shadow-xl p-5"
+            className="absolute top-full left-0 right-0 mt-2 z-50 bg-[var(--color-card,var(--color-bg,#141416))] text-[var(--color-ink,#f4f4f5)] border border-[var(--color-border,rgba(255,255,255,0.14))] rounded-2xl shadow-xl p-5"
           >
             {/* Month navigation */}
             <div className="flex items-center justify-between mb-4">
               <button
                 onClick={() => setViewMonth(addMonths(viewMonth, -1))}
                 aria-label="Previous month"
-                className="w-8 h-8 rounded-full hover:bg-bg/40 flex items-center justify-center"
+                className="w-8 h-8 rounded-full hover:bg-[rgba(255,255,255,0.1)] flex items-center justify-center"
               >
                 <ChevronLeft size={16} />
               </button>
@@ -115,21 +133,21 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate 
               <button
                 onClick={() => setViewMonth(addMonths(viewMonth, 1))}
                 aria-label="Next month"
-                className="w-8 h-8 rounded-full hover:bg-bg/40 flex items-center justify-center"
+                className="w-8 h-8 rounded-full hover:bg-[rgba(255,255,255,0.1)] flex items-center justify-center"
               >
                 <ChevronRight size={16} />
               </button>
             </div>
-            
+
             {/* Day labels */}
             <div className="grid grid-cols-7 gap-1 mb-2">
               {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
-                <div key={i} className="text-center text-[10px] font-mono tracking-wider uppercase text-text-secondary py-1">
+                <div key={i} className="text-center text-[10px] font-mono tracking-wider uppercase text-[var(--color-text-secondary,rgba(244,244,245,0.65))] py-1">
                   {d}
                 </div>
               ))}
             </div>
-            
+
             {/* Date grid */}
             <div className="grid grid-cols-7 gap-1">
               {monthDays(viewMonth).map((d, i) => {
@@ -139,10 +157,13 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate 
                 const iso = isoFromDate(d);
                 const isStart = iso === startDate;
                 const isEnd = iso === endDate;
-                const isInRange = startDate && previewEnd && iso > startDate && iso < previewEnd;
+                const isInRange = !single && startDate && previewEnd && iso > startDate && iso < previewEnd;
                 const isPast = iso < today;
                 const isToday = iso === todayISO();
-                
+
+                // color-mix keeps the brand-tinted hover/range states visible on
+                // both light and dark card colors (a fixed white/black tint
+                // disappears on one of them).
                 return (
                   <button
                     key={iso}
@@ -152,10 +173,10 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate 
                     onMouseLeave={() => setHoverDate(null)}
                     className={`
                       aspect-square text-xs rounded-md transition-all relative
-                      ${isPast ? "text-text-secondary/30 cursor-not-allowed" : "hover:bg-primary/10"}
-                      ${isStart || isEnd ? "bg-primary text-bg font-medium" : ""}
-                      ${isInRange ? "bg-primary/15" : ""}
-                      ${isToday && !isStart && !isEnd ? "ring-1 ring-primary/40" : ""}
+                      ${isPast ? "text-[var(--color-text-secondary,rgba(244,244,245,0.65))] opacity-40 cursor-not-allowed" : "hover:bg-[color-mix(in_srgb,var(--color-primary,#c9a876)_15%,transparent)]"}
+                      ${isStart || isEnd ? "bg-[var(--color-primary,#c9a876)] text-[var(--color-bg,#141416)] font-medium" : ""}
+                      ${isInRange ? "bg-[color-mix(in_srgb,var(--color-primary,#c9a876)_20%,transparent)]" : ""}
+                      ${isToday && !isStart && !isEnd ? "ring-1 ring-[var(--color-primary,#c9a876)]" : ""}
                     `}
                   >
                     {d.getDate()}
@@ -163,12 +184,18 @@ export default function DateRangePicker({ startDate, endDate, onChange, minDate 
                 );
               })}
             </div>
-            
+
             {/* Helper text */}
-            <p className="text-[10px] text-text-secondary mt-4 font-mono tracking-wider uppercase">
-              {!startDate && "Select check-in"}
-              {startDate && !endDate && "Select check-out"}
-              {startDate && endDate && `${nightsBetween(startDate, endDate)} night${nightsBetween(startDate, endDate) !== 1 ? "s" : ""}`}
+            <p className="text-[10px] text-[var(--color-text-secondary,rgba(244,244,245,0.65))] mt-4 font-mono tracking-wider uppercase">
+              {single ? (
+                startDate ? formatPretty(startDate) : "Select a date"
+              ) : (
+                <>
+                  {!startDate && "Select check-in"}
+                  {startDate && !endDate && "Select check-out"}
+                  {startDate && endDate && `${nightsBetween(startDate, endDate)} night${nightsBetween(startDate, endDate) !== 1 ? "s" : ""}`}
+                </>
+              )}
             </p>
           </motion.div>
         )}
@@ -190,21 +217,22 @@ function DateField({
   onClick: () => void;
   active: boolean;
 }) {
+  // Opaque resting surface: this field can sit directly on any page bg.
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`relative text-left px-4 py-3 bg-bg/30 border rounded-lg transition-all ${
-        active ? "border-primary" : "border-border/40 hover:border-border"
+      className={`relative text-left px-4 py-3 bg-[var(--color-card,var(--color-bg,#141416))] border rounded-lg transition-all ${
+        active ? "border-[var(--color-primary,#c9a876)]" : "border-[var(--color-border,rgba(255,255,255,0.14))]"
       }`}
     >
-      <div className="font-mono text-[9px] tracking-[0.2em] uppercase text-primary/80">
+      <div className="font-mono text-[9px] tracking-[0.2em] uppercase text-[var(--color-primary,#c9a876)] opacity-80">
         {label}
       </div>
-      <div className={`font-display text-sm mt-1 ${value ? "" : "text-text-secondary/60"}`}>
+      <div className={`font-display text-sm mt-1 ${value ? "text-[var(--color-ink,#f4f4f5)]" : "text-[var(--color-text-secondary,rgba(244,244,245,0.65))]"}`}>
         {value ? formatPretty(value) : "Add date"}
       </div>
-      <CalendarIcon size={14} className="absolute right-3 top-3 text-text-secondary/60" />
+      <CalendarIcon size={14} className="absolute right-3 top-3 text-[var(--color-text-secondary,rgba(244,244,245,0.65))]" />
     </button>
   );
 }
@@ -235,7 +263,7 @@ function monthDays(viewMonth: Date): (Date | null)[] {
   const month = viewMonth.getMonth();
   const firstDay = new Date(year, month, 1).getDay();
   const lastDay = new Date(year, month + 1, 0).getDate();
-  
+
   const cells: (Date | null)[] = [];
   for (let i = 0; i < firstDay; i++) cells.push(null);
   for (let d = 1; d <= lastDay; d++) cells.push(new Date(year, month, d));
