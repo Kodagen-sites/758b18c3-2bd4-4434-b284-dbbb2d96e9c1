@@ -1,0 +1,40 @@
+{
+  "name": "serene-wellness-clinic",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build --debug-prerender",
+    "start": "next start",
+    "lint": "next lint",
+    "gen:images": "tsx scripts/generate-images.ts",
+    "gen:unsplash": "tsx scripts/resolve-unsplash.ts",
+    "gen:videos": "tsx scripts/generate-videos.ts",
+    "gen:stitch": "bash scripts/stitch-scenes.sh",
+    "gen:frames": "bash scripts/extract-frames.sh raw/final.mp4 && tsx scripts/upload-frames.ts",
+    "gen:all": "npm run gen:images && npm run gen:videos && npm run gen:stitch && npm run gen:frames",
+    "test:visual": "playwright test"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "framer-motion": "^12.38.0",
+    "gsap": "^3.12.5",
+    "lucide-react": "^0.460.0",
+    "next": "^16.2.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "@playwright/test": "^1.48.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.4.20",
+    "babel-plugin-transform-react-jsx-location": "^0.2.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.14",
+    "tsx": "^4.22.3",
+    "typescript": "^5.6.0"
+  }
+}

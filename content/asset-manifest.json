@@ -1,0 +1,21 @@
+{
+  "bucket": "site-assets",
+  "projectId": "758b18c3-2bd4-4434-b284-dbbb2d96e9c1",
+  "ref": "",
+  "images": {
+    "service-aromatherapy-ritual": "https://images.unsplash.com/photo-1635749886064-8debe661b70e?ixid=M3w5MjY4OTB8MHwxfHNlYXJjaHwyfHxhcm9tYXRoZXJhcHklMjBlc3NlbnRpYWwlMjBvaWxzJTIwc3BhfGVufDF8MHx8fDE3ODM2Njc2NDF8MA&ixlib=rb-4.1.0&w=1920&h=1080&fit=crop&q=80&auto=format",
+    "service-deep-tissue-massage": "https://images.unsplash.com/photo-1611073615452-4889cb93422e?ixid=M3w5MjY4OTB8MHwxfHNlYXJjaHw3fHxkZWVwJTIwdGlzc3VlJTIwbWFzc2FnZSUyMHRoZXJhcHl8ZW58MXwwfHx8MTc4MzY2NzY0MHww&ixlib=rb-4.1.0&w=1920&h=1080&fit=crop&q=80&auto=format",
+    "service-wellness-consultation": "https://images.unsplash.com/photo-1782905294133-3a9c24dd3363?ixid=M3w5MjY4OTB8MHwxfHNlYXJjaHwxMHx8d2VsbG5lc3MlMjBjb25zdWx0YXRpb24lMjBDaW5lbWF0aWMlMjBkZXRhaWwlMjBvZiUyMGElMjBxdWlldCUyMG9uZS10by1vbmUlMjB3ZWxsbmVzcyUyMGNvbnN1bHRhdGlvbiUzQXxlbnwxfDB8fHwxNzgzNjY3NjQ1fDA&ixlib=rb-4.1.0&w=1920&h=1080&fit=crop&q=80&auto=format",
+    "section-mockup": "https://kodagen-site-assets.s3.eu-west-1.amazonaws.com/site-assets/758b18c3-2bd4-4434-b284-dbbb2d96e9c1/images/section-mockup.png",
+    "service-therapeutic-physiotherapy": "https://images.unsplash.com/photo-1519824145371-296894a0daa9?ixid=M3w5MjY4OTB8MHwxfHNlYXJjaHw1fHx0aGVyYXBldXRpYyUyMHBoeXNpb3RoZXJhcHklMjBDaW5lbWF0aWMlMjBkZXRhaWwlMjBvZiUyMGElMjBjaGFydGVyZWQlMjBwaHlzaW90aGVyYXBpc3QlMjBndWlkaW5nJTIwYXxlbnwxfDB8fHwxNzgzNjY3NjQ0fDA&ixlib=rb-4.1.0&w=1920&h=1080&fit=crop&q=80&auto=format",
+    "service-sports-recovery": "https://images.unsplash.com/photo-1646124714169-1fcc899a7500?ixid=M3w5MjY4OTB8MHwxfHNlYXJjaHw0fHxzcG9ydHMlMjByZWNvdmVyeSUyMENpbmVtYXRpYyUyMGRldGFpbCUyMG9mJTIwdGFyZ2V0ZWQlMjBzcG9ydHMlMjByZWNvdmVyeSUyMGJvZHl3b3JrJTNBJTIwYXxlbnwxfDB8fHwxNzgzNjY3NjQzfDA&ixlib=rb-4.1.0&w=1920&h=1080&fit=crop&q=80&auto=format",
+    "service-prenatal-massage": "https://images.unsplash.com/photo-1661340653712-c0a71c546210?ixid=M3w5MjY4OTB8MHwxfHNlYXJjaHw0fHxwcmVuYXRhbCUyMG1hc3NhZ2UlMjBDaW5lbWF0aWMlMjBkZXRhaWwlMjBvZiUyMGElMjBudXJ0dXJpbmclMjBwcmVuYXRhbCUyMG1hc3NhZ2UlM0ElMjBhbnxlbnwxfDB8fHwxNzgzNjY3NjQyfDA&ixlib=rb-4.1.0&w=1920&h=1080&fit=crop&q=80&auto=format",
+    "scene-1-start": "https://kodagen-site-assets.s3.eu-west-1.amazonaws.com/site-assets/758b18c3-2bd4-4434-b284-dbbb2d96e9c1/images/scene-1-start.png",
+    "scene-1-end": "https://kodagen-site-assets.s3.eu-west-1.amazonaws.com/site-assets/758b18c3-2bd4-4434-b284-dbbb2d96e9c1/images/scene-1-end.png"
+  },
+  "videos": {
+    "scene-1": "https://kodagen-site-assets.s3.eu-west-1.amazonaws.com/site-assets/758b18c3-2bd4-4434-b284-dbbb2d96e9c1/videos/scene-1.mp4"
+  },
+  "frames": {},
+  "updatedAt": "2026-07-10T07:16:05.859Z"
+}

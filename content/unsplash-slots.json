@@ -1,0 +1,10 @@
+[
+  { "slot": "scene-1-start", "keyword": "serene spa treatment room soft morning light", "orientation": "landscape" },
+  { "slot": "section-mockup", "keyword": "calm massage therapy hands warm oil", "orientation": "landscape" },
+  { "slot": "service-deep-tissue-massage", "keyword": "deep tissue massage therapy", "orientation": "landscape" },
+  { "slot": "service-therapeutic-physiotherapy", "keyword": "physiotherapy treatment session", "orientation": "landscape" },
+  { "slot": "service-wellness-consultation", "keyword": "wellness consultation calm room", "orientation": "landscape" },
+  { "slot": "service-prenatal-massage", "keyword": "prenatal massage relaxation", "orientation": "landscape" },
+  { "slot": "service-sports-recovery", "keyword": "sports recovery massage muscle", "orientation": "landscape" },
+  { "slot": "service-aromatherapy-ritual", "keyword": "aromatherapy essential oils spa", "orientation": "landscape" }
+]

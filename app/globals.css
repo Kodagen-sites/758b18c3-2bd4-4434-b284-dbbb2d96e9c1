@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Serene Wellness Clinic — dark cinematic spa palette */
+  --color-bg: #17130f; /* warm near-black */
+  --color-ink: #0e0b08; /* darkest — inner-page hero band */
+  --color-primary: #c9a876; /* soft sand-gold */
+  --color-accent: #a9bba0; /* muted sage (light section bg) */
+  --color-cream: #f5ede1; /* warm off-white text */
+  --color-terracotta: #c4623a; /* warm accent for hero text overlays */
+  --color-text-secondary: rgba(245, 237, 225, 0.62);
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-cream);
+  font-family: var(--font-body), "Nunito Sans", sans-serif;
+}
+
+::selection {
+  background: var(--color-primary);
+  color: var(--color-ink);
+}
+
+/* Thin, calm scrollbar to match the spa mood */
+::-webkit-scrollbar {
+  width: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-bg);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(201, 168, 118, 0.35);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(201, 168, 118, 0.55);
+}
